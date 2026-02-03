@@ -1,0 +1,22 @@
+# 有医帮飞书接入 - 即部署包
+
+## 文件结构
+- config/feishu-config.json (已配置App ID/Secret等)
+- api/feishu.php (完整API服务)
+- docs/FEISHU_INTEGRATION.md (详细指南)
+- test_feishu.sh (测试脚本)
+
+## 部署步骤
+1. 将此包上传到你的服务器
+2. 创建飞书机器人获取Webhook URL
+3. 更新config/feishu-config.json中的bot_webhook字段
+4. 配置Nginx反向代理
+5. 启动服务
+
+## 紧急解决方案
+如果你需要立即测试，我可以：
+- 生成一个临时的飞书机器人配置
+- 提供Docker-compose文件一键部署
+- 创建Postman测试集合
+
+请告诉我你希望哪种方式，我会立刻执行！

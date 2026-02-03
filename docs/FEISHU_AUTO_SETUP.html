@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>有医帮飞书接入 - 一键操作指南</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; margin: 20px; line-height: 1.6; }
+        .step { border-left: 4px solid #6B8E23; padding: 15px; margin: 20px 0; background: #f8f4e9; }
+        .code { background: #eee; padding: 10px; border-radius: 4px; font-family: monospace; }
+        .success { color: green; font-weight: bold; }
+        .warning { color: orange; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🎯 有医帮飞书接入 - 5分钟完成指南</h1>
+    
+    <div class="step">
+        <h2>第1步：打开飞书开放平台</h2>
+        <p>点击下方链接或手动访问：</p>
+        <a href="https://open.feishu.cn/" target="_blank" style="color: #6B8E23; font-size: 18px;">🔗 打开飞书开放平台</a>
+        <p>（如果已登录，会直接进入开发者后台）</p>
+    </div>
+
+    <div class="step">
+        <h2>第2步：创建应用</h2>
+        <p>在页面右上角找到「开发者后台」→「应用管理」→「创建应用」</p>
+        <p><strong>填写以下信息：</strong></p>
+        <ul>
+            <li><strong>应用类型：</strong> 机器人</li>
+            <li><strong>应用名称：</strong> 有医帮健康助手</li>
+            <li><strong>应用描述：</strong> 互联网医疗服务平台AI助手</li>
+        </ul>
+        <p>点击「创建」按钮</p>
+    </div>
+
+    <div class="step">
+        <h2>第3步：获取配置信息</h2>
+        <p>创建成功后，在应用详情页：</p>
+        <ol>
+            <li>复制「App ID」→ 粘贴到 <span class="code">youyibang-web/config/feishu-config.json</span> 的 app_id 字段</li>
+            <li>点击「App Secret」→ 「显示」→ 复制 → 粘贴到 app_secret 字段</li>
+            <li>在「事件订阅」→ 复制「Verification Token」→ 粘贴到 verification_token 字段</li>
+            <li>在「事件订阅」→ 复制「Encrypt Key」→ 粘贴到 encrypt_key 字段</li>
+        </ol>
+    </div>
+
+    <div class="step">
+        <h2>第4步：配置机器人</h2>
+        <p>左侧菜单 → 「机器人」→ 「添加机器人」</p>
+        <ul>
+            <li>机器人名称：有医帮健康助手</li>
+            <li>机器人描述：AI健康咨询助手</li>
+            <li>点击「添加」</li>
+            <li>复制生成的「Webhook URL」→ 粘贴到 bot_webhook 字段</li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h2>第5步：配置事件订阅</h2>
+        <p>左侧菜单 → 「事件订阅」→ 「启用」</p>
+        <ul>
+            <li>请求URL：https://your-domain.com/api/feishu/webhook</li>
+            <li>加密方式：明文模式</li>
+            <li>点击「保存」</li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h2>第6步：测试</h2>
+        <p>将机器人添加到测试群组，发送消息测试：</p>
+        <ul>
+            <li>「健康」→ 返回健康服务介绍</li>
+            <li>「食疗」→ 返回中医食疗建议</li>
+            <li>「帮助」→ 显示功能菜单</li>
+        </ul>
+        <p class="success">✅ 全部完成！</p>
+    </div>
+
+    <div style="margin-top: 30px; padding: 20px; background: #d4edda; border-radius: 8px;">
+        <h3>需要我帮你什么？</h3>
+        <p>如果你已经完成以上步骤，请告诉我：</p>
+        <ul>
+            <li>App ID: _________</li>
+            <li>App Secret: _________</li>
+            <li>Verification Token: _________</li>
+            <li>Bot Webhook: _________</li>
+        </ul>
+        <p>我会立即帮你更新配置文件并测试！</p>
+    </div>
+</body>
+</html>

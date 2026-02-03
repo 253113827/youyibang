@@ -1,0 +1,62 @@
+# 飞书应用创建详细步骤
+
+## 第一步：登录飞书开放平台
+1. 访问 https://open.feishu.cn/
+2. 使用你的飞书账号登录
+3. 点击右上角「开发者后台」
+
+## 第二步：创建应用
+1. 左侧菜单 → 「应用管理」→ 「创建应用」
+2. 选择「机器人」类型
+3. 应用名称：有医帮健康助手
+4. 应用描述：互联网医疗服务平台的智能助手
+5. 点击「创建」
+
+## 第三步：获取配置信息
+在新创建的应用详情页：
+
+### 基础信息
+- App ID: 在「基本信息」→「App ID」复制
+- App Secret: 在「基本信息」→「App Secret」点击「显示」后复制
+- Verification Token: 在「事件订阅」→「Verification Token」复制
+- Encrypt Key: 在「事件订阅」→「Encrypt Key」复制
+
+### 机器人配置
+1. 左侧菜单 → 「机器人」→ 「添加机器人」
+2. 机器人名称：有医帮健康助手
+3. 机器人描述：AI健康咨询助手
+4. 点击「添加」
+5. 复制「Webhook URL」（格式：https://open.feishu.cn/open-apis/bot/v2/hook/xxx）
+
+## 第四步：配置事件订阅
+1. 左侧菜单 → 「事件订阅」
+2. 点击「启用」
+3. 请求URL填写：https://your-domain.com/api/feishu/webhook
+   - 注意：先用本地测试地址，部署后再改正式地址
+4. 加密方式：选择「明文模式」（开发阶段）
+5. 点击「保存」
+
+## 第五步：更新配置文件
+将获取的信息填入：
+youyibang-web/config/feishu-config.json
+
+示例：
+{
+  "app_id": "cli_XXXXXXXXXXXXXXXX",
+  "app_secret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "verification_token": "your_verification_token_here",
+  "encrypt_key": "your_encrypt_key_here",
+  "webhook_url": "https://your-production-domain.com/api/feishu/webhook",
+  "bot_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+}
+
+## 第六步：测试
+1. 将机器人添加到测试群组
+2. 发送消息测试：「健康」、「食疗」、「帮助」
+
+## 需要我帮你什么？
+- 如果你已经创建了应用，请告诉我App ID等信息
+- 或者你需要我生成特定的测试脚本
+- 或者你想让我指导你一步步操作
+
+请告诉我你的进度，我可以提供针对性帮助！

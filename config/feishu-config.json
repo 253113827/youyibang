@@ -1,0 +1,8 @@
+{
+  "app_id": "cli_a9f5df44deb85cef",
+  "app_secret": "DWf47QZjvn0zc06EROEJIf76BOXJDXkq",
+  "verification_token": "LNWam6XB7sI7LyMwQr1WObT0zhNoWVGI",
+  "encrypt_key": "WWQghpFLk6UQsJy3JMuu3fnQPpVFeXhJ",
+  "webhook_url": "https://your-domain.com/api/feishu/webhook",
+  "bot_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+}
