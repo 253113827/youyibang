@@ -78,3 +78,19 @@ curl -b /tmp/c.txt -F 'case_id=1' -F 'type=舌苔' -F 'files[]=@/tmp/t.png' 'htt
 ## 越权语义
 
 所有按 `case_id` 操作的 act（poll/send/upload/record/record_save/ask）及 `ai_image`（按图片反查所属医案）都先校验 `cases.user_id` 与当前登录用户一致；不一致返回 `403 {"error":"无权访问该医案"}`，医案不存在返回 404。前端收到 401 会跳转登录页。
+
+## v2 接诊工作台升级（2026-11-11）
+
+### 变更接口
+- `save_opd`：新增可选 POST 字段 `tcm_checklist`（JSON：`{"selected":{"寒热:畏寒":true,...}}`），存 `opd_records.tcm_checklist`（新增 JSON 列，db.sql 条件 ALTER，已上服务器执行）；非法 JSON 存 NULL 不阻断。
+- `get_opd`：`record` 自然回传 `tcm_checklist`（SELECT *），前端据此回显勾选状态。
+- `ai_dx`：提示词与返回增加结构化字段 `associated_symptoms`（伴随症状数组，前端渲染为可点击 chip 写入现病史）与 `physical_findings`（查体）；置信度胶囊色：较可能绿/可能黄/需警惕红；`red_flags` 前端显示 🚩 转诊指征。
+- `update_patient`（新增）：POST `patient_id,name,gender,age,phone,allergy`；归属校验 = 患者须存在于当前医生任一 visit；非本人患者 403「无权修改该患者」。
+
+### 新增前端资源
+- `assets/speech.js`：公共语音转文字（webkitSpeechRecognition zh-CN，continuous+interim，结果插光标处）；不支持环境（iOS<14.5 Safari 等）自动隐藏 🎤；reception 各文本区均挂载。
+- `reception.php`：中医四诊勾选面板（服务端渲染 68 chip/14 行/4 组，一键插入病历）；黄色高亮编辑区(.editzone)；体格检查体温/血压/心率三内联框；处方三 tab（西药频次下拉/剂量±步进+单位/开药量+单位盒瓶袋；输液溶媒/滴速；中药剂量g/炮制/特殊煎法）；患者条保存(蓝)/取消/打印按钮组+编辑档案；取消=重载 get_opd。
+
+### 验收证据
+- php -l api.php/reception.php 通过；服务器备份目录 `_backup_ui_0438/`。
+- E2E（e2e_v2.sh 留档）：全链路 PASS，详见回传报告。测试数据已清零（patients/visits/opd/rx/tpl=0，diag_dict=36202）。

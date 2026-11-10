@@ -404,6 +404,22 @@ case 'create_patient': {
     ok(['patient_id' => $pid, 'visit_id' => $vid, 'archive_no' => $arc]);
 }
 
+/* 编辑患者档案（经 visit 归属校验，仅本人接诊中的患者可改） */
+case 'update_patient': {
+    /* 校验患者是否属于当前医生的就诊 */
+    $pid = (int)($_POST['patient_id'] ?? 0);
+    $uid = (int)($_SESSION['uid'] ?? 1);
+    $st = $pdo->prepare('SELECT COUNT(*) FROM visits WHERE patient_id=? AND doctor_id=?');
+    $st->execute([$pid, $uid]);
+    if (!$st->fetchColumn()) fail('无权修改该患者', 403);
+    $name = trim($_POST['name'] ?? '');
+    if ($name === '') fail('患者姓名为空');
+    $gender = in_array($_POST['gender'] ?? '', ['男', '女', '未知']) ? $_POST['gender'] : '未知';
+    $pdo->prepare('UPDATE patients SET name=?, gender=?, age=?, phone=?, allergy=? WHERE id=?')
+        ->execute([$name, $gender, trim($_POST['age'] ?? ''), trim($_POST['phone'] ?? ''), trim($_POST['allergy'] ?? ''), $pid]);
+    ok(['patient_id' => $pid]);
+}
+
 /* 今日队列 + 患者列表 + 历史就诊 */
 case 'queue': {
     $uid = (int)($_SESSION['uid'] ?? 1);
@@ -447,14 +463,18 @@ case 'save_opd': {
     foreach (is_array($trtArr) ? $trtArr : [] as $t) {
         $total += (float)($t['price'] ?? 0) * (float)($t['times'] ?? 1);
     }
-    $pdo->prepare('INSERT INTO opd_records (visit_id, chief_complaint, present_illness, allergy_history, physical_exam, diagnosis, auxiliary_exam, treatments, notes)
-        VALUES (?,?,?,?,?,?,?,?,?)
+    /* 中医四诊勾选（JSON，可选；非法 JSON 存 NULL 不阻断保存） */
+    $tcmRaw = trim($_POST['tcm_checklist'] ?? '');
+    $tcm = null;
+    if ($tcmRaw !== '') { $tcmDec = json_decode($tcmRaw, true); if (is_array($tcmDec)) $tcm = json_encode($tcmDec, JSON_UNESCAPED_UNICODE); }
+    $pdo->prepare('INSERT INTO opd_records (visit_id, chief_complaint, present_illness, allergy_history, physical_exam, diagnosis, auxiliary_exam, treatments, notes, tcm_checklist)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE chief_complaint=VALUES(chief_complaint), present_illness=VALUES(present_illness),
         allergy_history=VALUES(allergy_history), physical_exam=VALUES(physical_exam), diagnosis=VALUES(diagnosis),
-        auxiliary_exam=VALUES(auxiliary_exam), treatments=VALUES(treatments), notes=VALUES(notes)')
+        auxiliary_exam=VALUES(auxiliary_exam), treatments=VALUES(treatments), notes=VALUES(notes), tcm_checklist=VALUES(tcm_checklist)')
         ->execute([$vid, trim($_POST['chief_complaint'] ?? ''), trim($_POST['present_illness'] ?? ''),
                    trim($_POST['allergy_history'] ?? ''), trim($_POST['physical_exam'] ?? ''),
-                   trim($_POST['diagnosis'] ?? ''), $aux, $trt, trim($_POST['notes'] ?? '')]);
+                   trim($_POST['diagnosis'] ?? ''), $aux, $trt, trim($_POST['notes'] ?? ''), $tcm]);
     if (!empty($_POST['rx_items'])) {
         $pdo->prepare('DELETE FROM prescriptions WHERE visit_id=?')->execute([$vid]);
         foreach (['western', 'chinese', 'infusion'] as $i => $t) {
@@ -530,13 +550,14 @@ case 'ai_dx': {
 基于以上信息，给出 3-5 个鉴别诊断，按可能性从高到低排列。
 
 # 输出要求（严格 JSON）
-{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）"}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
+{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）"}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
 
 # 规则
 1. 只依据输入信息推理，不得虚构；信息不足写进 missing_info。
 2. 必须包含至少一条"需警惕但不能除外"的严重可治疾病。
 3. 涉及急危重指征时在 red_flags 写出转诊建议。
-4. disclaimer 字段原样保留。
+4. associated_symptoms 为该诊断常见伴随症状词组（每条 2-6 字），供医生点击快捷写入病历。
+5. disclaimer 字段原样保留。
 P;
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
     if ($r === null) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 服务暂不可用']);

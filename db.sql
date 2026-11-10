@@ -239,3 +239,12 @@ CREATE TABLE IF NOT EXISTS diag_dict (
   category VARCHAR(20) DEFAULT '' COMMENT 'WM/TCM',
   INDEX (name), INDEX (name_tcm), INDEX (zd_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='诊断字典（来源 OpenHIS xt_zd, GPL-3.0）';
+
+-- ========== v2: 门诊接诊工作台升级（中医四诊勾选面板） ==========
+-- opd_records 增加 tcm_checklist(JSON) 列（MariaDB/MySQL 通用条件写法）
+SET @col_exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opd_records' AND COLUMN_NAME = 'tcm_checklist');
+SET @ddl := IF(@col_exists = 0,
+  'ALTER TABLE opd_records ADD COLUMN tcm_checklist JSON NULL COMMENT ''中医四诊勾选（问诊/舌象/面色/脉象）'' AFTER notes',
+  'SELECT 1');
+PREPARE _st FROM @ddl; EXECUTE _st; DEALLOCATE PREPARE _st;
