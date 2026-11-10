@@ -1,0 +1,278 @@
+<?php
+require __DIR__ . '/config.php';
+need_login();
+$id = (int)($_GET['id'] ?? 0);
+$st = db()->prepare('SELECT * FROM cases WHERE id=?');
+$st->execute([$id]);
+$case = $st->fetch();
+if (!$case) { http_response_code(404); exit('医案不存在'); }
+?>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>医案 #<?= $id ?> <?= htmlspecialchars($case['patient_name']) ?> - 有医帮</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="top">
+  <a href="index.php" class="logo">← 有医帮</a>
+  <span><?= htmlspecialchars($case['patient_name']) ?> · <?= $case['gender'] ?>/<?= htmlspecialchars($case['age']) ?>岁</span>
+</header>
+<main>
+  <div class="case-head card">
+    <b>主诉：</b><?= htmlspecialchars($case['chief_complaint'] ?: '（待补充）') ?>
+    <time><?= $case['created_at'] ?></time>
+  </div>
+
+  <section class="card">
+    <h2>问诊对话</h2>
+    <div id="chat" class="chat"></div>
+
+    <div id="presetBox" class="preset"></div>
+
+    <div class="send-row">
+      <input id="msgInput" placeholder="输入追问内容（可空）">
+      <button id="micBtn" type="button" title="语音输入">🎤</button>
+      <button id="sendBtn">发送</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>照片</h2>
+    <div class="up-row">
+      <select id="imgType">
+        <option>面色</option><option>舌苔</option><option>化验单</option><option>其他</option>
+      </select>
+      <label class="filebtn">📷 拍照/上传<input type="file" id="imgInput" accept="image/*" capture="environment" multiple hidden></label>
+    </div>
+    <div id="imgList" class="imglist"></div>
+  </section>
+
+  <section class="card">
+    <h2>病案整理</h2>
+    <button id="genBtn">🤖 AI 整理病案</button>
+    <div id="recView" class="record"></div>
+    <details id="recEditBox"><summary>编辑病案</summary>
+      <textarea id="recEdit" rows="12"></textarea>
+      <button id="recSave">保存</button>
+    </details>
+    <div id="signStatus"></div>
+    <div id="validPanel"></div>
+    <div class="send-row" style="flex-wrap:wrap;gap:6px">
+      <button id="validateBtn">✅ 规则校验</button>
+      <button id="signOpenBtn">✍ 电子签名</button>
+      <button id="revokeBtn" hidden>↩ 撤回签名</button>
+      <button id="commitBtn">🗄 归档 EMR</button>
+      <button id="verifyBtn">🔐 验证哈希链</button>
+      <button id="exportBtn">🖨 导出打印版</button>
+    </div>
+    <div id="signModal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;display:flex;align-items:center;justify-content:center">
+      <div style="background:#fff;padding:14px;border-radius:10px;max-width:92vw">
+        <b>电子签名</b>　签名人：<input id="signerName" placeholder="医生姓名" style="width:120px">
+        <br><canvas id="signPad" width="500" height="180" style="border:1px dashed #888;touch-action:none;margin-top:8px;max-width:100%"></canvas>
+        <div style="margin-top:6px">
+          <button id="signClear">清除</button>
+          <button id="signOk">确认签名</button>
+          <button id="signCancel">取消</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>追问与推荐</h2>
+    <div class="send-row">
+      <input id="askInput" placeholder="如：推荐诊断和方剂的依据是什么？">
+      <button id="askBtn">提问</button>
+    </div>
+    <div id="askOut" class="record"></div>
+  </section>
+</main>
+<p class="footer">本系统输出仅供参考，不构成医疗建议。<a href="javascript:window.print()">打印/导出本页</a></p>
+<script>
+const CASE_ID = <?= $id ?>;
+let PRESET = [];
+let lastMsg = 0, lastImg = 0, recVer = 0;
+let presetDone = new Set(), busy = false;
+
+const $ = s => document.querySelector(s);
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
+function mdLite(s){let h=esc(s);h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');return h.split(/\n/).map(l=>{
+  if(/^#{1,4}\s/.test(l))return '<h3>'+l.replace(/^#{1,4}\s/,'')+'</h3>';
+  if(/^\s*[-*]\s/.test(l))return '<li>'+l.replace(/^\s*[-*]\s/,'')+'</li>';
+  return l?'<p>'+l+'</p>':'';}).join('');}
+
+function addMsg(m){
+  const div=document.createElement('div');
+  div.className='msg '+m.role;
+  div.dataset.mid=m.id;
+  div.innerHTML=(m.role==='user'?'<b>医生</b>':'<b>AI</b>')+'<span>'+mdLite(m.content)+'</span><time>'+esc(m.created_at)+'</time>';
+  $('#chat').appendChild(div);
+  $('#chat').scrollTop=1e9;
+}
+function renderPreset(){
+  if(!PRESET.length||presetDone.size>=PRESET.length){if(PRESET.length)$('#presetBox').innerHTML='<small>预设问诊已完成</small>';return;}
+  let i=presetDone.size;
+  $('#presetBox').innerHTML='<div class="preset-q">预设 '+(i+1)+'/'+PRESET.length+'：'+esc(PRESET[i])+
+   ' <button onclick="sendPreset('+i+')">发送</button> <button class="ghost" onclick="skipPreset('+i+')">跳过</button></div>';
+}
+window.sendPreset=async i=>{if(busy)return;busy=true;$('#sendBtn').disabled=true;
+  await post({act:'send',case_id:CASE_ID,preset_index:i});presetDone.add(i);busy=false;$('#sendBtn').disabled=false;};
+window.skipPreset=i=>{presetDone.add(i);renderPreset();};
+
+async function post(data){
+  const r=await fetch('api.php?act='+data.act,{method:'POST',body:new URLSearchParams(Object.entries(data).filter(([k])=>k!=='act'))});
+  if(r.status===401){location='login.php';return{};}
+  return r.json();
+}
+
+$('#sendBtn').onclick=async()=>{
+  const t=$('#msgInput').value.trim();if(!t||busy)return;busy=true;$('#sendBtn').disabled=true;
+  $('#msgInput').value='';
+  await post({act:'send',case_id:CASE_ID,text:t});
+  busy=false;$('#sendBtn').disabled=false;
+};
+
+$('#imgInput').onchange=async()=>{
+  const fd=new FormData();fd.append('act','upload');fd.append('case_id',CASE_ID);fd.append('type',$('#imgType').value);
+  for(const f of $('#imgInput').files)fd.append('files[]',f);
+  $('#imgInput').value='';
+  const r=await fetch('api.php?act=upload',{method:'POST',body:fd});
+  const j=await r.json();
+  if(j.error)alert(j.error);
+};
+
+function renderImg(im){
+  const d=document.createElement('div');d.className='imgcard';d.id='img'+im.id;
+  d.innerHTML='<div class="imgtag">'+esc(im.type)+(im.ai_result?' ✅已解析':'')+'</div><img loading="lazy" src="'+esc(im.path)+'">'+
+    '<div class="aiout">'+(im.ai_result?mdLite(im.ai_result):'<button onclick="aiParse('+im.id+')">AI 解析</button>')+'</div>';
+  $('#imgList').appendChild(d);
+}
+window.aiParse=async id=>{
+  const d=$('#img'+id);d.querySelector('.aiout').innerHTML='解析中…';
+  const j=await post({act:'ai_image',id});
+  if(j.error)d.querySelector('.aiout').innerHTML='<span class="err">'+esc(j.error)+'</span> <button onclick="aiParse('+id+')">重试</button>';
+  else d.querySelector('.aiout').innerHTML=mdLite(j.ai_result);
+};
+
+$('#genBtn').onclick=async()=>{
+  $('#genBtn').disabled=true;$('#genBtn').textContent='AI 整理中，请稍候…';
+  const j=await post({act:'record',case_id:CASE_ID});
+  $('#genBtn').disabled=false;$('#genBtn').textContent='🤖 AI 整理病案';
+  if(j.error)alert(j.error);else{recVer=Math.floor(Date.now()/1000);$('#recView').innerHTML=mdLite(j.content_md);$('#recEdit').value=j.content_md;}
+};
+
+$('#recSave').onclick=async()=>{
+  const j=await post({act:'record_save',case_id:CASE_ID,content_md:$('#recEdit').value});
+  if(j.ok){recVer=j.ver;$('#recView').innerHTML=mdLite($('#recEdit').value);alert('已保存');}
+  else alert(j.error||'保存失败');
+};
+
+$('#askBtn').onclick=async()=>{
+  const q=$('#askInput').value.trim();if(!q)return;
+  $('#askOut').innerHTML='思考中…';
+  const j=await post({act:'ask',case_id:CASE_ID,q});
+  $('#askOut').innerHTML=j.error?'<span class="err">'+esc(j.error)+'</span>':mdLite(j.reply);
+};
+
+// ---------- 语音问诊（Web Speech API，不支持则隐藏按钮） ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR(); rec.lang = 'zh-CN'; rec.interimResults = false; rec.continuous = false;
+  let listening = false;
+  rec.onresult = e => { const t = e.results[0][0].transcript; $('#msgInput').value = ($('#msgInput').value + t).trim(); };
+  rec.onend = () => { listening = false; $('#micBtn').textContent = '🎤'; };
+  rec.onerror = () => { listening = false; $('#micBtn').textContent = '🎤'; };
+  $('#micBtn').onclick = () => {
+    if (listening) { rec.stop(); return; }
+    listening = true; $('#micBtn').textContent = '⏺'; rec.start();
+  };
+} else {
+  $('#micBtn').hidden = true;
+}
+
+// ---------- 规则校验面板 ----------
+function renderValid(j){
+  const p = $('#validPanel');
+  const li = (arr, cls) => (arr||[]).map(x=>'<li class="'+cls+'">'+esc(x)+'</li>').join('');
+  p.innerHTML = '<ul class="validlist" style="margin:6px 0">'
+    + li(j.errors,'err-item') + li(j.warnings,'warn-item') + '</ul>'
+    + '<small>' + (j.errors&&j.errors.length ? '<b style="color:#c00">存在阻断项，禁止签名</b>' : (j.warnings&&j.warnings.length?'<b style="color:#8a6d00">仅警告项，可签名</b>':'校验通过')) + '</small>';
+}
+$('#validateBtn').onclick = async () => {
+  $('#validPanel').innerHTML = '校验中…';
+  const j = await (await fetch('api.php?act=validate&case_id='+CASE_ID)).json();
+  if (j.error) $('#validPanel').innerHTML = '<span class="err">'+esc(j.error)+'</span>'; else renderValid(j);
+};
+
+// ---------- 电子签名（canvas 手写，鼠标+触摸） ----------
+let drawing=false, hasInk=false, sctx;
+function signPos(e){const r=$('#signPad').getBoundingClientRect();const t=e.touches?e.touches[0]:e;return[t.clientX-r.left,t.clientY-r.top];}
+function initPad(){
+  const cv=$('#signPad');sctx=cv.getContext('2d');sctx.lineWidth=2.5;sctx.lineCap='round';sctx.strokeStyle='#111';
+  const start=e=>{drawing=true;hasInk=true;const[x,y]=signPos(e);sctx.beginPath();sctx.moveTo(x,y);e.preventDefault&&e.preventDefault();};
+  const move=e=>{if(!drawing)return;const[x,y]=signPos(e);sctx.lineTo(x,y);sctx.stroke();e.preventDefault&&e.preventDefault();};
+  const stop=()=>drawing=false;
+  cv.addEventListener('mousedown',start);cv.addEventListener('mousemove',move);window.addEventListener('mouseup',stop);
+  cv.addEventListener('touchstart',start,{passive:false});cv.addEventListener('touchmove',move,{passive:false});cv.addEventListener('touchend',stop);
+}
+$('#signOpenBtn').onclick=()=>{ $('#signModal').hidden=false; if(!sctx) initPad(); };
+$('#signCancel').onclick=()=>$('#signModal').hidden=true;
+$('#signClear').onclick=()=>{sctx.clearRect(0,0,signPad.width,signPad.height);hasInk=false;};
+$('#signOk').onclick=async()=>{
+  if(!hasInk){alert('请先手写签名');return;}
+  if(!$('#signerName').value.trim()){alert('请填写签名人姓名');return;}
+  const j=await post({act:'sign',case_id:CASE_ID,signer_name:$('#signerName').value.trim(),sign_image:signPad.toDataURL('image/png')});
+  if(j.error){alert((j.error||'')+'\n'+(j.errors||[]).join('\n'));return;}
+  $('#signModal').hidden=true;alert('签名成功'+(j.warnings&&j.warnings.length?'\n警告：\n'+j.warnings.join('\n'):''));
+  refreshStatus();
+};
+$('#revokeBtn').onclick=async()=>{
+  if(!confirm('撤回签名将产生新草稿，确认？'))return;
+  const j=await post({act:'revoke_sign',case_id:CASE_ID});
+  if(j.error)alert(j.error);else{alert('已撤回，可修改病历');refreshStatus();}
+};
+
+// ---------- 归档 / 验证哈希链 / 导出 ----------
+$('#commitBtn').onclick=async()=>{
+  if(!confirm('将签名版病历追加归档到 EMR（不可修改）？'))return;
+  const j=await post({act:'commit_emr',case_id:CASE_ID});
+  if(j.error)alert(j.error);else{alert('已归档\n内容哈希：'+j.content_hash);refreshStatus();}
+};
+$('#verifyBtn').onclick=async()=>{
+  const j=await (await fetch('api.php?act=verify_emr&case_id='+CASE_ID)).json();
+  if(j.error)alert(j.error);
+  else alert(j.valid?'✅ 哈希链完整（共 '+j.total+' 条归档）':'❌ 哈希链在第 '+j.broken_at+' 条记录处被篡改！');
+};
+$('#exportBtn').onclick=()=>window.open('api.php?act=export&case_id='+CASE_ID,'_blank');
+
+// ---------- 签名/归档状态 ----------
+let emrState={signed:false,archived:false};
+async function refreshStatus(){
+  const j=await (await fetch('api.php?act=validate&case_id='+CASE_ID)).json();
+  if(j.error){$('#signStatus').innerHTML='';return;}
+  emrState={signed:j.signed,archived:j.archived};
+  $('#signStatus').innerHTML='<small>状态：'+(j.archived?'<b style="color:#080">已归档 🔐</b>':(j.signed?'<b style="color:#080">已签名 🔒</b>':'未签名'))+'</small>';
+  $('#revokeBtn').hidden=!j.signed||j.archived;
+  $('#signOpenBtn').disabled=j.signed&&j.archived;
+  $('#commitBtn').disabled=j.archived;
+  if(j.errors||j.warnings)renderValid(j);
+}
+
+// 轮询同步（手机拍照 → 电脑实时出现）
+async function poll(){
+  try{
+    const j=await (await fetch('api.php?act=poll&case_id='+CASE_ID+'&last_msg='+lastMsg+'&last_img='+lastImg+'&rec_ver='+recVer)).json();
+    if(j.error)return;
+    for(const m of (j.messages||[])){if(m.id>lastMsg){lastMsg=m.id;addMsg(m);}}
+    for(const im of (j.images||[])){if(im.id>lastImg){lastImg=im.id;renderImg(im);}}
+    if(j.record){$('#recView').innerHTML=mdLite(j.record.content_md);$('#recEdit').value=j.record.content_md;recVer=j.record.ver;emrState={signed:!!j.record.is_signed,archived:!!j.record.archived};refreshStatus();}
+    if(j.preset&&j.preset.length){PRESET=j.preset;renderPreset();}
+  }catch(e){}
+}
+setInterval(poll,3000);poll();refreshStatus();
+</script>
+</body>
+</html>
