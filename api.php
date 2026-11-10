@@ -32,7 +32,7 @@ function q_is_female(array $q): bool { return !empty($q[2]); }
 
 /* 导出打印版式（A4）
  * 注：OFD-H 版式为 2027 国家标准预留，当前为打印/PDF 过渡方案（window.print 出 PDF）。 */
-function export_html(array $c, array $rec, array $sig, array $emr, array $parsed, array $res): string {
+function export_html(array $c, array $rec, array $emr, array $parsed, array $res): string {
     $e = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
     $drugs = $parsed['drugs'] ?? [];
     $rxRows = '';
@@ -54,8 +54,6 @@ h2 { font-size: 12pt; border-left: 4px solid #111; padding-left: 8px; margin: 14
 table { width:100%; border-collapse: collapse; margin: 6px 0; }
 th, td { border: 1px solid #444; padding: 4px 8px; font-size: 10.5pt; text-align: left; }
 pre { white-space: pre-wrap; font: inherit; }
-.sigbox { margin-top: 16px; display:flex; gap: 24px; align-items: flex-end; }
-.sigbox img { border: 1px dashed #888; max-width: 180px; }
 .hash { font-family: monospace; font-size: 9pt; word-break: break-all; background: #f4f4f4; padding: 6px; }
 .w { color: #8a6d00; } .e { color: #c00; font-weight: bold; }
 .foot { margin-top: 18px; border-top: 1px solid #999; padding-top: 6px; font-size: 8.5pt; color: #666; }
@@ -71,15 +69,11 @@ pre { white-space: pre-wrap; font: inherit; }
 <pre>' . $e($rec['content_md'] ?? '（无病历）') . '</pre>
 <h2>处方一览</h2>
 <table><tr><th>#</th><th>药名</th><th>剂量</th><th>备注</th></tr>' . ($rxRows ?: '<tr><td colspan="4">无处方</td></tr>') . '</table>
-<h2>电子签名</h2>
-<div class="sigbox">' . (!empty($sig)
-        ? '<div>签名人：' . $e($sig['signer_name']) . '<br>签名时间：' . $e($sig['signed_at']) . '<br>内容指纹：<span class="hash">' . $e($sig['content_hash']) . '</span></div><img src="' . $e($sig['sign_path']) . '" alt="签名图">'
-        : '<div style="color:#c00">尚未签名</div>') . '</div>
 <h2>归档信息（防篡改哈希链）</h2>' . (!empty($emr)
         ? '<div class="hash">归档时间：' . $e($emr['created_at']) . ' ｜ 内容哈希：' . $e($emr['content_hash']) . '<br>前序哈希：' . $e($emr['prev_hash']) . '</div>'
         : '<div style="color:#8a6d00">尚未归档（EMR 落库后显示哈希指纹）</div>') . '
 ' . (($er || $w) ? '<h2>校验提示</h2><ul>' . $er . $w . '</ul>' : '') . '
-<div class="foot">免责声明：本病历由 AI 辅助整理并经执业医师电子签名确认，仅供参考，不构成对任何人的诊疗指令。打印版式说明：OFD-H 版式为 2027 国家标准预留，当前为打印/PDF 过渡方案。有医帮 youyibang.com</div>
+<div class="foot">免责声明：本病历由 AI 辅助整理并经执业医师审核确认，仅供参考，不构成对任何人的诊疗指令。打印版式说明：OFD-H 版式为 2027 国家标准预留，当前为打印/PDF 过渡方案。有医帮 youyibang.com</div>
 </body></html>';
 }
 
@@ -133,14 +127,14 @@ case 'poll': {
     $imgs = $pdo->prepare('SELECT id, path, type, ai_result, created_at FROM images WHERE case_id=? AND id>? ORDER BY id');
     $imgs->execute([$cid, $lastImg]);
 
-    $rec = $pdo->prepare('SELECT id, content_md, is_signed, archived, UNIX_TIMESTAMP(updated_at) AS ver FROM records WHERE case_id=?');
+    $rec = $pdo->prepare('SELECT id, content_md, archived, UNIX_TIMESTAMP(updated_at) AS ver FROM records WHERE case_id=?');
     $rec->execute([$cid]);
     $recRow = $rec->fetch();
 
     ok([
         'messages' => $msgs->fetchAll(),
         'images'   => $imgs->fetchAll(),
-        'record'   => ($recRow && (int)$recRow['ver'] > $recVer) ? ['content_md' => $recRow['content_md'], 'ver' => (int)$recRow['ver'], 'is_signed' => (int)$recRow['is_signed'], 'archived' => (int)$recRow['archived']] : null,
+        'record'   => ($recRow && (int)$recRow['ver'] > $recVer) ? ['content_md' => $recRow['content_md'], 'ver' => (int)$recRow['ver'], 'archived' => (int)$recRow['archived']] : null,
         'preset'   => array_map('q_text', preset_list($cid)),
     ]);
 }
@@ -260,8 +254,6 @@ case 'ai_image': {
 case 'record': {
     $cid = (int)($_POST['case_id'] ?? 0);
     check_owner($cid);
-    $st = $pdo->prepare('SELECT is_signed FROM records WHERE case_id=?'); $st->execute([$cid]);
-    if ((int)$st->fetchColumn() === 1) fail('病历已电子签名锁定，请先撤回签名再重新生成', 409);
     $msgs = $pdo->prepare('SELECT role, content FROM messages WHERE case_id=? AND role<>"system" ORDER BY id');
     $msgs->execute([$cid]);
     $dialog = '';
@@ -282,12 +274,10 @@ case 'record': {
     ok(['content_md' => $r]);
 }
 
-/* ---------- 保存编辑病案（已签名版本锁定，需先撤回签名） ---------- */
+/* ---------- 保存编辑病案 ---------- */
 case 'record_save': {
     $cid = (int)($_POST['case_id'] ?? 0);
     check_owner($cid);
-    $st = $pdo->prepare('SELECT is_signed FROM records WHERE case_id=?'); $st->execute([$cid]);
-    if ((int)$st->fetchColumn() === 1) fail('病历已电子签名锁定，请先撤回签名再修改', 409);
     $md = $_POST['content_md'] ?? '';
     $pdo->prepare('INSERT INTO records (case_id, content_md) VALUES (?,?) ON DUPLICATE KEY UPDATE content_md=VALUES(content_md)')
         ->execute([$cid, $md]);
@@ -320,62 +310,13 @@ case 'validate': {
     ]);
 }
 
-/* ---------- 电子签名 ---------- */
-case 'sign': {
-    $cid = (int)($_POST['case_id'] ?? 0);
-    check_owner($cid);
-    $name = trim($_POST['signer_name'] ?? '');
-    $img = $_POST['sign_image'] ?? '';
-    if ($name === '') fail('签名人姓名为空');
-    if (!preg_match('/^data:image\/png;base64,/', $img)) fail('签名数据无效');
-    // 规则引擎存在 errors 时拒绝签名（409）
-    $st = $pdo->prepare('SELECT content_md FROM records WHERE case_id=?'); $st->execute([$cid]);
-    $md = (string)$st->fetchColumn();
-    if (trim($md) === '') fail('尚无病历草稿可签署', 404);
-    $parsed = parse_record($md);
-    $res = validate_record($parsed);
-    if (!empty($res['errors'])) {
-        http_response_code(409);
-        echo json_encode(['error' => '存在阻断性校验错误，禁止签名', 'errors' => $res['errors']], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-    // 保存签名图
-    $dir = __DIR__ . '/uploads/signs';
-    if (!is_dir($dir)) mkdir($dir, 0755, true);
-    $fname = 's' . $cid . '_' . bin2hex(random_bytes(6)) . '.png';
-    file_put_contents($dir . '/' . $fname, base64_decode(substr($img, strpos($img, ',') + 1)));
-    $path = 'uploads/signs/' . $fname;
-    $uid = (int)($_SESSION['uid'] ?? 1);
-    $now = date('Y-m-d H:i:s');
-    $hash = hash('sha256', $md . '|' . $now . '|' . $uid);
-    $pdo->prepare('INSERT INTO signatures (case_id, uid, signer_name, sign_path, snapshot_json, content_hash, signed_at) VALUES (?,?,?,?,?,?,?)')
-        ->execute([$cid, $uid, $name, $path, json_encode($res, JSON_UNESCAPED_UNICODE), $hash, $now]);
-    // 注意：lastInsertId 必须在 INSERT 后立即取——紧随其后的 UPDATE 会把连接的 last_insert_id 重置为 0
-    $sign_id = (int)$pdo->lastInsertId();
-    $pdo->prepare('UPDATE records SET is_signed=1 WHERE case_id=?')->execute([$cid]);
-    ok(['sign_id' => $sign_id, 'content_hash' => $hash, 'signed_at' => $now, 'warnings' => $res['warnings']]);
-}
-
-/* ---------- 撤回签名（产生新草稿：签名标记 revoked，草稿解锁） ---------- */
-case 'revoke_sign': {
-    $cid = (int)($_POST['case_id'] ?? 0);
-    check_owner($cid);
-    $st = $pdo->prepare('SELECT id FROM signatures WHERE case_id=? AND revoked=0 ORDER BY id DESC LIMIT 1');
-    $st->execute([$cid]);
-    $sid = $st->fetchColumn();
-    if (!$sid) fail('无可撤回的签名', 404);
-    $pdo->prepare('UPDATE signatures SET revoked=1 WHERE id=?')->execute([(int)$sid]);
-    $pdo->prepare('UPDATE records SET is_signed=0 WHERE case_id=?')->execute([$cid]);
-    ok(['revoked' => true]);
-}
-
 /* ---------- EMR 防篡改归档（追加式，仅 INSERT） ---------- */
 case 'commit_emr': {
     $cid = (int)($_POST['case_id'] ?? 0);
     check_owner($cid);
-    $st = $pdo->prepare('SELECT content_md, is_signed FROM records WHERE case_id=?'); $st->execute([$cid]);
+    $st = $pdo->prepare('SELECT content_md FROM records WHERE case_id=?'); $st->execute([$cid]);
     $rec = $st->fetch();
-    if (!$rec || !$rec['is_signed']) fail('病历尚未电子签名，禁止归档', 409);
+    if (!$rec || trim((string)$rec['content_md']) === '') fail('尚无病历草稿可归档', 404);
     $content = (string)$rec['content_md'];
     $prev = $pdo->query('SELECT content_hash FROM emr_records ORDER BY id DESC LIMIT 1')->fetchColumn();
     $prevHash = $prev ?: EMR_SEED;
@@ -383,7 +324,7 @@ case 'commit_emr': {
     $uid = (int)($_SESSION['uid'] ?? 1);
     $pdo->prepare('INSERT INTO emr_records (case_id, uid, content_md, content_hash, prev_hash, created_at) VALUES (?,?,?,?,?,NOW())')
         ->execute([$cid, $uid, $content, $hash, $prevHash]);
-    // lastInsertId 必须在 INSERT 后立即取（同 sign：UPDATE 会重置 last_insert_id）
+    // lastInsertId 必须在 INSERT 后立即取（紧随其后的 UPDATE 会重置 last_insert_id）
     $emr_id = (int)$pdo->lastInsertId();
     $pdo->prepare('UPDATE records SET archived=1 WHERE case_id=?')->execute([$cid]);
     ok(['emr_id' => $emr_id, 'content_hash' => $hash, 'prev_hash' => $prevHash]);
@@ -412,14 +353,12 @@ case 'export': {
     $c = $st->fetch(); if (!$c) fail('医案不存在', 404);
     $st = $pdo->prepare('SELECT * FROM records WHERE case_id=?'); $st->execute([$cid]);
     $rec = $st->fetch() ?: [];
-    $sig = $pdo->prepare('SELECT * FROM signatures WHERE case_id=? AND revoked=0 ORDER BY id DESC LIMIT 1');
-    $sig->execute([$cid]); $sig = $sig->fetch() ?: [];
     $emr = $pdo->prepare('SELECT * FROM emr_records WHERE case_id=? ORDER BY id DESC LIMIT 1');
     $emr->execute([$cid]); $emr = $emr->fetch() ?: [];
     $parsed = parse_record((string)($rec['content_md'] ?? ''));
     $res = validate_record($parsed);
     header('Content-Type: text/html; charset=utf-8');
-    echo export_html($c, $rec, $sig, $emr, $parsed, $res);
+    echo export_html($c, $rec, $emr, $parsed, $res);
     exit;
 }
 

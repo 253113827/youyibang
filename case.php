@@ -58,26 +58,13 @@ if (!$case) { http_response_code(404); exit('医案不存在'); }
       <textarea id="recEdit" rows="12"></textarea>
       <button id="recSave">保存</button>
     </details>
-    <div id="signStatus"></div>
+    <div id="archStatus"></div>
     <div id="validPanel"></div>
     <div class="send-row" style="flex-wrap:wrap;gap:6px">
       <button id="validateBtn">✅ 规则校验</button>
-      <button id="signOpenBtn">✍ 电子签名</button>
-      <button id="revokeBtn" hidden>↩ 撤回签名</button>
       <button id="commitBtn">🗄 归档 EMR</button>
       <button id="verifyBtn">🔐 验证哈希链</button>
       <button id="exportBtn">🖨 导出打印版</button>
-    </div>
-    <div id="signModal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;display:flex;align-items:center;justify-content:center">
-      <div style="background:#fff;padding:14px;border-radius:10px;max-width:92vw">
-        <b>电子签名</b>　签名人：<input id="signerName" placeholder="医生姓名" style="width:120px">
-        <br><canvas id="signPad" width="500" height="180" style="border:1px dashed #888;touch-action:none;margin-top:8px;max-width:100%"></canvas>
-        <div style="margin-top:6px">
-          <button id="signClear">清除</button>
-          <button id="signOk">确认签名</button>
-          <button id="signCancel">取消</button>
-        </div>
-      </div>
     </div>
   </section>
 
@@ -199,7 +186,7 @@ function renderValid(j){
   const li = (arr, cls) => (arr||[]).map(x=>'<li class="'+cls+'">'+esc(x)+'</li>').join('');
   p.innerHTML = '<ul class="validlist" style="margin:6px 0">'
     + li(j.errors,'err-item') + li(j.warnings,'warn-item') + '</ul>'
-    + '<small>' + (j.errors&&j.errors.length ? '<b style="color:#c00">存在阻断项，禁止签名</b>' : (j.warnings&&j.warnings.length?'<b style="color:#8a6d00">仅警告项，可签名</b>':'校验通过')) + '</small>';
+    + '<small>' + (j.errors&&j.errors.length ? '<b style="color:#c00">存在阻断项</b>' : (j.warnings&&j.warnings.length?'<b style="color:#8a6d00">存在警告项</b>':'校验通过')) + '</small>';
 }
 $('#validateBtn').onclick = async () => {
   $('#validPanel').innerHTML = '校验中…';
@@ -207,37 +194,9 @@ $('#validateBtn').onclick = async () => {
   if (j.error) $('#validPanel').innerHTML = '<span class="err">'+esc(j.error)+'</span>'; else renderValid(j);
 };
 
-// ---------- 电子签名（canvas 手写，鼠标+触摸） ----------
-let drawing=false, hasInk=false, sctx;
-function signPos(e){const r=$('#signPad').getBoundingClientRect();const t=e.touches?e.touches[0]:e;return[t.clientX-r.left,t.clientY-r.top];}
-function initPad(){
-  const cv=$('#signPad');sctx=cv.getContext('2d');sctx.lineWidth=2.5;sctx.lineCap='round';sctx.strokeStyle='#111';
-  const start=e=>{drawing=true;hasInk=true;const[x,y]=signPos(e);sctx.beginPath();sctx.moveTo(x,y);e.preventDefault&&e.preventDefault();};
-  const move=e=>{if(!drawing)return;const[x,y]=signPos(e);sctx.lineTo(x,y);sctx.stroke();e.preventDefault&&e.preventDefault();};
-  const stop=()=>drawing=false;
-  cv.addEventListener('mousedown',start);cv.addEventListener('mousemove',move);window.addEventListener('mouseup',stop);
-  cv.addEventListener('touchstart',start,{passive:false});cv.addEventListener('touchmove',move,{passive:false});cv.addEventListener('touchend',stop);
-}
-$('#signOpenBtn').onclick=()=>{ $('#signModal').hidden=false; if(!sctx) initPad(); };
-$('#signCancel').onclick=()=>$('#signModal').hidden=true;
-$('#signClear').onclick=()=>{sctx.clearRect(0,0,signPad.width,signPad.height);hasInk=false;};
-$('#signOk').onclick=async()=>{
-  if(!hasInk){alert('请先手写签名');return;}
-  if(!$('#signerName').value.trim()){alert('请填写签名人姓名');return;}
-  const j=await post({act:'sign',case_id:CASE_ID,signer_name:$('#signerName').value.trim(),sign_image:signPad.toDataURL('image/png')});
-  if(j.error){alert((j.error||'')+'\n'+(j.errors||[]).join('\n'));return;}
-  $('#signModal').hidden=true;alert('签名成功'+(j.warnings&&j.warnings.length?'\n警告：\n'+j.warnings.join('\n'):''));
-  refreshStatus();
-};
-$('#revokeBtn').onclick=async()=>{
-  if(!confirm('撤回签名将产生新草稿，确认？'))return;
-  const j=await post({act:'revoke_sign',case_id:CASE_ID});
-  if(j.error)alert(j.error);else{alert('已撤回，可修改病历');refreshStatus();}
-};
-
 // ---------- 归档 / 验证哈希链 / 导出 ----------
 $('#commitBtn').onclick=async()=>{
-  if(!confirm('将签名版病历追加归档到 EMR（不可修改）？'))return;
+  if(!confirm('将当前病历追加归档到 EMR（不可修改）？'))return;
   const j=await post({act:'commit_emr',case_id:CASE_ID});
   if(j.error)alert(j.error);else{alert('已归档\n内容哈希：'+j.content_hash);refreshStatus();}
 };
@@ -248,15 +207,13 @@ $('#verifyBtn').onclick=async()=>{
 };
 $('#exportBtn').onclick=()=>window.open('api.php?act=export&case_id='+CASE_ID,'_blank');
 
-// ---------- 签名/归档状态 ----------
-let emrState={signed:false,archived:false};
+// ---------- 归档状态 ----------
+let emrState={archived:false};
 async function refreshStatus(){
   const j=await (await fetch('api.php?act=validate&case_id='+CASE_ID)).json();
-  if(j.error){$('#signStatus').innerHTML='';return;}
-  emrState={signed:j.signed,archived:j.archived};
-  $('#signStatus').innerHTML='<small>状态：'+(j.archived?'<b style="color:#080">已归档 🔐</b>':(j.signed?'<b style="color:#080">已签名 🔒</b>':'未签名'))+'</small>';
-  $('#revokeBtn').hidden=!j.signed||j.archived;
-  $('#signOpenBtn').disabled=j.signed&&j.archived;
+  if(j.error){$('#archStatus').innerHTML='';return;}
+  emrState={archived:j.archived};
+  $('#archStatus').innerHTML='<small>状态：'+(j.archived?'<b style="color:#080">已归档 🔐</b>':'未归档')+'</small>';
   $('#commitBtn').disabled=j.archived;
   if(j.errors||j.warnings)renderValid(j);
 }
@@ -268,7 +225,7 @@ async function poll(){
     if(j.error)return;
     for(const m of (j.messages||[])){if(m.id>lastMsg){lastMsg=m.id;addMsg(m);}}
     for(const im of (j.images||[])){if(im.id>lastImg){lastImg=im.id;renderImg(im);}}
-    if(j.record){$('#recView').innerHTML=mdLite(j.record.content_md);$('#recEdit').value=j.record.content_md;recVer=j.record.ver;emrState={signed:!!j.record.is_signed,archived:!!j.record.archived};refreshStatus();}
+    if(j.record){$('#recView').innerHTML=mdLite(j.record.content_md);$('#recEdit').value=j.record.content_md;recVer=j.record.ver;emrState={archived:!!j.record.archived};refreshStatus();}
     if(j.preset&&j.preset.length){PRESET=j.preset;renderPreset();}
   }catch(e){}
 }
