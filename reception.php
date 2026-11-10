@@ -13,6 +13,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <title>有医帮 - 接诊工作台</title>
 <link rel="stylesheet" href="assets/style.css">
 <script src="assets/speech.js"></script>
+<script src="assets/recorder.js"></script>
 <style>
 body { margin:0; font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f0f2f5; }
 .navbar { display:flex; gap:4px; align-items:center; background:#1f6f43; color:#fff; padding:0 12px; height:44px; position:sticky; top:0; z-index:50; }
@@ -136,6 +137,17 @@ table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing
 <div class="col mid">
   <div class="ptbar" id="ptbar">未选择患者（左侧点击「今天」列表）</div>
   <div id="recForm" style="display:none">
+  <!-- 语音问诊横条：录音按钮 + 计时 + 波形 + 实时转写 + 转写全文 + 整理成病历 -->
+  <div class="voicebar" id="voiceBar">
+    <div class="vb-left" id="recMount"></div>
+    <div class="vb-right">
+      <label class="fl">转写全文（可编辑后再整理）<textarea id="f_transcript" rows="3" placeholder="点击左侧麦克风开始问诊录音，转写自动填入此处"></textarea></label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn blue sm" onclick="organizeTranscript()">🩺 整理成病历</button>
+        <span id="orgNote" class="hint"></span>
+      </div>
+    </div>
+  </div>
   <!-- 患者信息条 + 保存/取消/打印按钮组 -->
   <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px;flex-wrap:wrap">
     <button class="btn blue" onclick="saveOpd()">保存</button>
@@ -230,6 +242,19 @@ table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing
   </div>
   <div id="rtab-hist" style="display:none"><div id="ptHist">（先选择患者）</div></div>
 </div>
+</div>
+
+<!-- 整理成病历预览确认弹窗（医生可编辑后确认写入） -->
+<div class="modal" id="mOrg">
+  <div class="box" style="width:520px">
+    <h3>🩺 整理成病历（预览确认）</h3>
+    <p class="hint">以下为 AI 整理结果，请核对编辑后确认写入（追加到对应栏，不覆盖已有内容）</p>
+    <label class="fl">主诉<textarea id="org_cc" rows="2"></textarea></label>
+    <label class="fl">现病史<textarea id="org_pi" rows="4"></textarea></label>
+    <label class="fl">四诊摘要（写入体格检查）<textarea id="org_tcm" rows="3"></textarea></label>
+    <div style="display:flex;gap:8px"><button class="btn" onclick="orgApply()">确认写入病历</button>
+    <button class="btn gray" onclick="document.getElementById('mOrg').classList.remove('show')">取消</button></div>
+  </div>
 </div>
 
 <!-- 快速接诊弹窗 -->
@@ -604,7 +629,7 @@ async function aiDx() {
   const fd = new FormData(); fd.append('visit_id', CUR.visit);
   const r = await fetch(A + 'ai_dx', { method: 'POST', body: fd }); const j = await r.json();
   if (!j.ok) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.error || '失败') + '</p>'; return; }
-  if (!(j.differentials || []).length) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.note || 'AI 服务暂不可用') + '</p>'; return; }
+  if (!(j.differentials || []).length) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.note || 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）') + '</p>'; return; }
   $('aiResult').innerHTML = '<p class="hint">⚠️ 以下内容仅供参考，点击症状标签可写入病历</p>' + j.differentials.map(d =>
     `<div class="aibox"><div class="dxname">${esc(d.diagnosis)}
       <span class="pill" style="background:${d.confidence === '较可能' ? '#1f6f43' : (d.confidence === '可能' ? '#d48806' : '#c0392b')};color:#fff">${esc(d.confidence || '可能')}</span></div>
@@ -679,9 +704,70 @@ async function savePatient() {
   if (j.ok) { $('mEdit').classList.remove('show'); openVisit(CUR.visit); } else alert(j.error || '失败');
 }
 
+/* ---------- 语音问诊录音组件（边录边转 + 一键整理成病历） ---------- */
+let REC = null;
+function recorderInit() {
+  const mount = $('recMount');
+  if (!window.Recorder) return; /* recorder.js 未加载（理论不会） */
+  REC = window.Recorder.mount(mount, {
+    onFinal: function (fin) {
+      /* final 结果追加进「转写全文」可编辑框（interim 由组件自身实时区显示） */
+      const el = $('f_transcript');
+      el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + fin;
+    },
+    onStop: function () { $('orgNote').textContent = '录音结束，可编辑转写后点击「整理成病历」'; }
+  });
+  if (!REC) mount.innerHTML = '<span class="hint">当前浏览器不支持语音录音，请手动输入</span>';
+}
+
+/* 整理成病历：调 act=organize_transcript，成功弹预览确认框；离线兜底插原始转写 */
+async function organizeTranscript() {
+  const transcript = $('f_transcript').value.trim();
+  if (!transcript) return alert('请先录音或输入转写内容');
+  if (!CUR.visit) return alert('未选择患者');
+  $('orgNote').textContent = 'AI 整理中…';
+  const fd = new FormData();
+  fd.append('transcript', transcript);
+  fd.append('visit_id', CUR.visit);
+  const r = await fetch(A + 'organize_transcript', { method: 'POST', body: fd });
+  const j = await r.json();
+  if (j.ok) {
+    $('org_cc').value = j.chief_complaint || '';
+    $('org_pi').value = j.present_illness || '';
+    $('org_tcm').value = j.tcm_summary || '';
+    $('orgNote').textContent = '';
+    $('mOrg').classList.add('show');
+  } else if (j.raw !== undefined) {
+    /* 上游离线兜底：原始转写标注后插入现病史末尾，不丢数据 */
+    appendField('f_pi', '【原始转写 待整理】\n' + j.raw);
+    $('orgNote').textContent = j.note || 'AI 整理暂不可用';
+  } else {
+    $('orgNote').textContent = j.error || '整理失败';
+  }
+}
+/* 预览确认：三段追加写入（不覆盖） */
+function orgApply() {
+  if ($('org_cc').value.trim()) appendField('f_cc', $('org_cc').value.trim());
+  if ($('org_pi').value.trim()) appendField('f_pi', $('org_pi').value.trim());
+  if ($('org_tcm').value.trim()) appendField('pe_t', $('org_tcm').value.trim(), true);
+  $('mOrg').classList.remove('show');
+  $('orgNote').textContent = '已写入病历，记得保存';
+}
+/* 向字段追加文本；peSpecial=true 时写入体格检查文本域语义（pe_t 为自由文本兜底位） */
+function appendField(id, text, peSpecial) {
+  const el = $(id);
+  if (peSpecial) { /* 四诊摘要并入体格检查：优先追加到体温输入后的自由文本 */
+    el.value = (el.value ? el.value + '  ' : '') + text;
+  } else {
+    el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + text;
+  }
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 /* ---------- 初始化 ---------- */
 tcmCount();
 speechInit();
+recorderInit();
 if (window.matchMedia('(max-width: 768px)').matches) document.querySelector('.mview').style.display = 'flex';
 loadQueue(); setInterval(loadQueue, 30000);
 </script>

@@ -94,3 +94,19 @@ curl -b /tmp/c.txt -F 'case_id=1' -F 'type=舌苔' -F 'files[]=@/tmp/t.png' 'htt
 ### 验收证据
 - php -l api.php/reception.php 通过；服务器备份目录 `_backup_ui_0438/`。
 - E2E（e2e_v2.sh 留档）：全链路 PASS，详见回传报告。测试数据已清零（patients/visits/opd/rx/tpl=0，diag_dict=36202）。
+
+## v3 语音问诊升级（2026-11-11）
+
+### 新增接口：act=organize_transcript
+- POST `transcript`（必填，口语转写全文）、`visit_id` 或 `case_id`（可选，传了就做归属校验 check_visit/check_owner）、`target`（可选，主诉/现病史，整理侧重）。
+- 成功：`{"ok":true,"chief_complaint":"","present_illness":"","tcm_summary":""}`（三段已去语气词/寒暄，缺项为"未提及"，末尾含"本整理由 AI 生成，请医生核对"由模型生成于 present_illness/tcm_summary 文本内）。
+- 上游离线降级：HTTP 200 `{"ok":false,"note":"AI 整理暂不可用（上游模型离线）。已插入原始转写，恢复后可重新整理","raw":"<原始转写>"}`——前端将 `raw` 标注【原始转写 待整理】后插入现病史末尾，不丢数据；AI 返回非 JSON 同样走 raw 兜底。
+- 录音音频不上传，只传转写文本；转写文本随病历 save_opd 持久化。
+
+### 新增前端资源
+- `assets/recorder.js`：`Recorder.mount(el, {compact, onFinal, onInterim, onStop})`。三态按钮（空闲🎤/录音中红⏹+脉冲/处理中）、mm:ss 计时器、声波纹 canvas（getUserMedia+AnalyserNode 真波形优先，失败降级随识别事件跳动的伪波形）；SpeechRecognition continuous+interim，onend 自动 restart；显示"已识别 X 字"。不支持 SpeechRecognition 的环境返回 null（页面回退 speech.js 隐藏按钮逻辑）。音频只留本地。
+- `reception.php`：中栏表单顶部「语音问诊」横条（录音组件+转写全文可编辑框+【整理成病历】按钮+预览确认弹窗 mOrg：主诉→f_cc、现病史→f_pi、四诊摘要→体格检查，均追加不覆盖）。
+- `case.php`：问诊输入框旁紧凑版录音组件，final 转写追加进 msgInput；不支持时回退旧版隐藏按钮。
+
+### 文案统一
+全站"AI 服务暂时不可用/请稍后重试"类提示统一为："AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）"（api.php send/record/ask/ai_dx/ai_rx_review 降级分支与 reception.php 前端兜底文案）。降级行为本身不变。

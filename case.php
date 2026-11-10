@@ -14,6 +14,8 @@ if (!$case) { http_response_code(404); exit('医案不存在'); }
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>医案 #<?= $id ?> <?= htmlspecialchars($case['patient_name']) ?> - 有医帮</title>
 <link rel="stylesheet" href="assets/style.css">
+<script src="assets/speech.js"></script>
+<script src="assets/recorder.js"></script>
 </head>
 <body>
 <header class="top">
@@ -34,7 +36,7 @@ if (!$case) { http_response_code(404); exit('医案不存在'); }
 
     <div class="send-row">
       <input id="msgInput" placeholder="输入追问内容（可空）">
-      <button id="micBtn" type="button" title="语音输入">🎤</button>
+      <span id="recMountCompact"></span>
       <button id="sendBtn">发送</button>
     </div>
   </section>
@@ -164,21 +166,25 @@ $('#askBtn').onclick=async()=>{
   $('#askOut').innerHTML=j.error?'<span class="err">'+esc(j.error)+'</span>':mdLite(j.reply);
 };
 
-// ---------- 语音问诊（Web Speech API，不支持则隐藏按钮） ----------
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (SR) {
-  const rec = new SR(); rec.lang = 'zh-CN'; rec.interimResults = false; rec.continuous = false;
-  let listening = false;
-  rec.onresult = e => { const t = e.results[0][0].transcript; $('#msgInput').value = ($('#msgInput').value + t).trim(); };
-  rec.onend = () => { listening = false; $('#micBtn').textContent = '🎤'; };
-  rec.onerror = () => { listening = false; $('#micBtn').textContent = '🎤'; };
-  $('#micBtn').onclick = () => {
-    if (listening) { rec.stop(); return; }
-    listening = true; $('#micBtn').textContent = '⏺'; rec.start();
-  };
-} else {
-  $('#micBtn').hidden = true;
-}
+// ---------- 语音问诊（紧凑版录音组件：转写结果追加进对话输入框；不支持则回退 speech.js 隐藏逻辑） ----------
+(function () {
+  const mount = document.getElementById('recMountCompact');
+  const target = document.getElementById('msgInput');
+  if (window.Recorder && window.Recorder.mount(mount, {
+    compact: true,
+    onFinal: function (fin) {
+      /* final 结果追加到输入框光标处 */
+      const pos = typeof target.selectionEnd === 'number' ? target.selectionEnd : target.value.length;
+      target.value = target.value.slice(0, pos) + fin + target.value.slice(pos);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  })) return;
+  /* 回退：不支持录音组件 → 旧版隐藏按钮逻辑 */
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.id = 'micBtn'; btn.title = '语音输入'; btn.textContent = '🎤';
+  mount.replaceWith(btn);
+  window.attachSpeech ? window.attachSpeech(target) : (btn.hidden = true);
+})();
 
 // ---------- 规则校验面板 ----------
 function renderValid(j){

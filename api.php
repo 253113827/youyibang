@@ -165,7 +165,7 @@ case 'send': {
         $ctx[] = ['role' => 'system', 'content' => "（患者图片资料[{$im['type']}]解析：{$im['ai_result']}）"];
     }
     $reply = llm_chat($ctx, 120);
-    if ($reply === null) $reply = '（AI 服务暂时不可用，请稍后重试。已记录本次对话。）';
+    if ($reply === null) $reply = '（AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）。已记录本次对话。）';
     $pdo->prepare('INSERT INTO messages (case_id, role, content) VALUES (?,?,?)')->execute([$cid, 'assistant', $reply]);
     ok(['user_id' => $mid, 'reply' => $reply]);
 }
@@ -268,7 +268,7 @@ case 'record': {
     $c = $case->fetch();
     $prompt = medical_record_prompt($c, $dialog, $imgTxt);
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 240);
-    if ($r === null) fail('AI 服务不可用，请稍后重试', 502);
+    if ($r === null) fail('AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）', 502);
     $pdo->prepare('INSERT INTO records (case_id, content_md) VALUES (?,?) ON DUPLICATE KEY UPDATE content_md=VALUES(content_md)')
         ->execute([$cid, $r]);
     ok(['content_md' => $r]);
@@ -376,7 +376,7 @@ case 'ask': {
     $ctx[] = ['role' => 'system', 'content' => '当前病案整理结果：' . ($rec ?: '（尚未生成）') . "\n请引用医案上下文回答医生追问，给出推荐诊断与方剂的依据。"];
     $ctx[] = ['role' => 'user', 'content' => $q];
     $r = llm_chat($ctx, 180);
-    if ($r === null) fail('AI 服务不可用', 502);
+    if ($r === null) fail('AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）', 502);
     $pdo->prepare('INSERT INTO messages (case_id, role, content) VALUES (?,?,?)')->execute([$cid, 'assistant', $r]);
     ok(['reply' => $r]);
 }
@@ -560,7 +560,7 @@ case 'ai_dx': {
 5. disclaimer 字段原样保留。
 P;
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
-    if ($r === null) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 服务暂不可用']);
+    if ($r === null) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）']);
     $s = strpos($r, '{'); $e = strrpos($r, '}');
     $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
     $dx = is_array($j) && isset($j['differentials']) && is_array($j['differentials']) ? array_slice($j['differentials'], 0, 5) : [];
@@ -650,7 +650,7 @@ P;
     }
     ok(['pass' => !array_filter($alerts, fn($a) => $a['severity'] === 'critical') && empty($aiWarnings),
         'warnings' => array_merge($alerts, $aiWarnings),
-        'note' => $r === null ? 'AI 服务暂不可用，仅返回规则引擎结果' : 'AI 建议仅供参考',
+        'note' => $r === null ? 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效），仅返回规则引擎结果' : 'AI 建议仅供参考',
         'disclaimer' => '本审查由 AI 与规则库生成，仅供开方医生参考，不能替代医生的临床判断与药典核对，开方前请再次核对药品说明书。']);
 }
 
@@ -758,6 +758,48 @@ pre { white-space: pre-wrap; font: inherit; }
 <div style="border-top:1px solid #999;margin-top:14px;padding-top:6px;font-size:8.5pt;color:#666">免责声明：本单据由有医帮系统辅助生成，仅供参考，不构成诊疗指令。youyibang.com</div>
 </body></html>';
     exit;
+}
+
+/* 一键整理医疗病历：口语转写 → 中医病历结构化（主诉/现病史/四诊摘要）
+ * 上游离线时降级：返回 ok:false + raw 原始转写，前端兜底插入现病史，不丢数据。 */
+case 'organize_transcript': {
+    $transcript = trim($_POST['transcript'] ?? '');
+    if ($transcript === '') fail('转写内容为空');
+    /* 归属校验（可选参数，二者至少传其一才校验） */
+    $vid = (int)($_POST['visit_id'] ?? 0);
+    $cid = (int)($_POST['case_id'] ?? 0);
+    if ($vid) check_visit($vid);
+    if ($cid) check_owner($cid);
+    $target = trim($_POST['target'] ?? ''); /* 可选侧重：主诉/现病史 */
+    $targetNote = $target !== '' ? "\n本次整理侧重点：【{$target}】，其余部分仍需完整输出。" : '';
+    $prompt = <<<P
+你是中医门诊病历整理助手。下面是一段医患问诊的口语转写，请整理为规范病历文本：
+1. 去除语气词（嗯、啊、呃）、重复、寒暄与无关内容；
+2. 按【主诉】【现病史】【四诊摘要】三段结构输出，某段信息缺失时标注"未提及"；
+3. 保留所有医学信息，不得编造、不得遗漏症状/病程/诱因/伴随症/舌脉等；
+4. 末尾固定加一行："本整理由 AI 生成，请医生核对"。{$targetNote}
+5. 只输出严格 JSON，不要任何解释文字：{"chief_complaint":"主诉文本","present_illness":"现病史文本","tcm_summary":"四诊摘要文本"}
+
+# 口语转写
+{$transcript}
+P;
+    $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
+    if ($r === null) {
+        /* 上游离线：兜底返回原始转写，前端插入现病史末尾 */
+        echo json_encode(['ok' => false, 'note' => 'AI 整理暂不可用（上游模型离线）。已插入原始转写，恢复后可重新整理', 'raw' => $transcript], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $s = strpos($r, '{'); $e = strrpos($r, '}');
+    $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
+    if (!is_array($j) || !isset($j['chief_complaint'])) {
+        echo json_encode(['ok' => false, 'note' => 'AI 返回格式异常，已插入原始转写，恢复后可重新整理', 'raw' => $transcript], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    ok([
+        'chief_complaint' => trim((string)$j['chief_complaint']),
+        'present_illness' => trim((string)($j['present_illness'] ?? '未提及')),
+        'tcm_summary'     => trim((string)($j['tcm_summary'] ?? '未提及')),
+    ]);
 }
 
 default:
