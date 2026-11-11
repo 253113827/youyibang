@@ -222,7 +222,13 @@
         };
         rec.onerror = function (ev) {
           var code = ev && ev.error;
-          if (code === 'not-allowed' || code === 'service-not-allowed') { say(ERRMSG[code]); srFatal = true; hardStop(); return; }
+          if (code === 'not-allowed' || code === 'service-not-allowed') {
+            /* SR 单通道失败：只停 SR，云端分片通道继续（不杀整个组件） */
+            stopSR();
+            if (asrActive) say('浏览器识别不可用，云端分片转写中…');
+            else { say(ERRMSG[code] || '浏览器识别不可用'); }
+            return;
+          }
           if (code === 'network') {
             srFatal = true; /* 不再无限重启 */
             if (asrActive) say(ERRMSG.network);
@@ -233,8 +239,14 @@
         };
         try { rec.start(); } catch (e) { /* SR 启动失败时云端分片仍可工作 */ }
       }
+      function stopSR() {
+        want = false; srFatal = true;
+        if (rec) { try { rec.onend = null; rec.onerror = null; rec.stop(); } catch (e) {} }
+        rec = null;
+      }
       function hardStop() {
-        want = false; live = false;
+        stopSR();
+        live = false;
         stopTimer(); stopWave(); stopChunkASR();
         setState('idle');
         if (typeof opts.onStop === 'function') opts.onStop(fullText);
