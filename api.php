@@ -866,7 +866,7 @@ case 'asr_chunk': {
             $j = json_decode($body, true);
             /* text 字段存在即成功（空 text = 静音分片或 ASR 忙丢弃，属正常） */
             if (is_array($j) && array_key_exists('text', $j)) {
-                ok(['text' => trim((string)$j['text']), 'note' => (string)($j['note'] ?? '')]);
+                ok(['text' => trim((string)$j['text'], " |　"), 'note' => (string)($j['note'] ?? '')]);
             }
         }
         $err = $cerr ?: "HTTP {$http} {$body}";
