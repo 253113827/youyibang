@@ -643,6 +643,49 @@ P;
         'notes' => (string)($j['notes'] ?? ''), 'type' => 'western']);
 }
 
+/* 问诊录音归档：上传保存（医疗录音留存，可回放/修正转写） */
+case 'upload_recording': {
+    $vid = (int)($_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    if (empty($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) fail('缺少音频');
+    $dur = (int)($_POST['duration'] ?? 0);
+    $dir = __DIR__ . '/uploads/audio/visit_' . $vid;
+    if (!is_dir($dir)) mkdir($dir, 0755, true);
+    $ext = pathinfo($_FILES['audio']['name'] ?? '', PATHINFO_EXTENSION) ?: 'webm';
+    $ext = preg_replace('/[^a-z0-9]/i', '', strtolower($ext)) ?: 'webm';
+    $fname = date('Ymd_His') . '_' . mt_rand(1000, 9999) . '.' . $ext;
+    $rel = 'uploads/audio/visit_' . $vid . '/' . $fname;
+    if (!move_uploaded_file($_FILES['audio']['tmp_name'], __DIR__ . '/' . $rel)) fail('保存音频失败');
+    $st = $pdo->prepare('INSERT INTO visit_recordings (visit_id, file_path, duration_sec) VALUES (?,?,?)');
+    $st->execute([$vid, $rel, $dur]);
+    $rid = (int)$pdo->lastInsertId();
+    ok(['rec_id' => $rid, 'url' => $rel]);
+}
+
+/* 录音列表（含转写，供回放/修正） */
+case 'recording_list': {
+    $vid = (int)($_GET['visit_id'] ?? $_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    $st = $pdo->prepare('SELECT id, file_path, duration_sec, transcript, created_at FROM visit_recordings WHERE visit_id = ? ORDER BY id DESC');
+    $st->execute([$vid]);
+    $rows = $st->fetchAll();
+    foreach ($rows as &$r) { $r['url'] = $r['file_path']; unset($r['file_path']); }
+    ok(['recordings' => $rows]);
+}
+
+/* 保存/修正归档转写 */
+case 'save_recording_transcript': {
+    $rid = (int)($_POST['rec_id'] ?? 0);
+    $txt = $_POST['transcript'] ?? '';
+    if ($rid <= 0) fail('缺少录音 ID');
+    $st = $pdo->prepare('SELECT id FROM visit_recordings WHERE id = ?');
+    $st->execute([$rid]);
+    if (!$st->fetch()) fail('录音不存在', 404);
+    $st = $pdo->prepare('UPDATE visit_recordings SET transcript = ? WHERE id = ?');
+    $st->execute([$txt, $rid]);
+    ok(['rec_id' => $rid]);
+}
+
 /* 处方安全审查：规则引擎（rules.php 配对表+过敏交叉）优先，AI 补充；warnings 带 source 字段 */
 case 'ai_rx_review': {
     $vid = (int)($_POST['visit_id'] ?? 0);

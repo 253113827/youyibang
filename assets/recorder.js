@@ -286,9 +286,9 @@
       function hardStop() {
         stopSR();
         live = false;
-        stopTimer(); stopWave(); stopChunkASR();
+        stopTimer(); stopWave(); stopChunkASR(); stopStreamWS();
         setState('idle');
-        if (typeof opts.onStop === 'function') opts.onStop(fullText);
+        if (typeof opts.onStop === 'function') opts.onStop(fullText, window._lastRecBlob || null);
       }
 
       btn.onclick = function () {
@@ -298,24 +298,105 @@
           want = false; srFatal = false;
           try { rec && rec.stop(); } catch (e) {}
           stopChunkASR();
+          stopStreamWS(); /* 结束流式会话 */
           setTimeout(function () {
             live = false; processing = false;
             stopTimer(); stopWave(); setState('idle');
             interimEl.textContent = '';
-            if (typeof opts.onStop === 'function') opts.onStop(fullText);
+            if (typeof opts.onStop === 'function') opts.onStop(fullText, window._lastRecBlob || null);
           }, 200);
           return;
         }
         live = true; fullText = ''; srHadText = false; srFatal = false; asrBusy = false;
+        window._recStartAt = Date.now();
         count(); setState('rec');
         startTimer();
         startRealWave();
-        startChunkASR(); /* 先启动分片通道：WebKit 中 SR 会独占麦克风，后启动会拿不到设备 */
+        startStreamWS(); /* 真流式优先：WebSocket 增量文本实时上屏（走 wss 代理） */
+        startChunkASR(); /* 分片通道兜底：流式未出字时启用 */
         startSR();       /* SR 出字则分片自动让位（srHadText 去重） */
       };
 
+      /* ---- 通道0：真流式 WebSocket（R2T2 ws_server，增量文本，亚秒上屏）+ 整段归档录音 ---- */
+      var ws = null, wsLive = false, wsAudioCtx = null, wsProc = null, wsSrc = null, wsStream = null, wsSent = 0;
+      var archRec = null, archChunks = [];
+      function startStreamWS() {
+        if (!asrCfg || !asrCfg.wsUrl || !window.WebSocket || !navigator.mediaDevices) return;
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+          if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
+          wsStream = s;
+          /* 整段归档录音：与流式共用同一路麦克风 */
+          try {
+            archChunks = [];
+            archRec = new MediaRecorder(s);
+            archRec.ondataavailable = function (e) { if (e.data && e.data.size) archChunks.push(e.data); };
+            archRec.onstop = function () {
+              if (archChunks.length) {
+                var types = archChunks.map(function (c) { return c.type; });
+                window._lastRecBlob = new Blob(archChunks, { type: types[0] || 'audio/webm' });
+              }
+              archChunks = [];
+            };
+            archRec.start();
+          } catch (e) { archRec = null; }
+          ws.binaryType = 'arraybuffer';
+          ws.onopen = function () {
+            if (!live) return;
+            wsLive = true;
+            say('流式转写中…');
+            var AC2 = window.AudioContext || window.webkitAudioContext;
+            wsAudioCtx = new AC2();
+            wsSrc = wsAudioCtx.createMediaStreamSource(s);
+            wsProc = wsAudioCtx.createScriptProcessor(4096, 1, 1);
+            var mute = wsAudioCtx.createGain(); mute.gain.value = 0;
+            var downCnt = 0;
+            wsProc.onaudioprocess = function (e) {
+              if (!wsLive) return;
+              var d = e.inputBuffer.getChannelData(0);
+              /* 48k→16k 简单抽取（1/3）后转 PCM16 */
+              var n = Math.floor(d.length / 3), pcm = new Int16Array(n);
+              for (var i = 0; i < n; i++) {
+                var x = Math.max(-1, Math.min(1, d[i * 3]));
+                pcm[i] = x < 0 ? x * 0x8000 : x * 0x7FFF;
+              }
+              if (ws.readyState === 1) ws.send(pcm.buffer);
+            };
+            wsSrc.connect(wsProc); wsProc.connect(mute); mute.connect(wsAudioCtx.destination);
+          };
+          ws.onmessage = function (e) {
+            try {
+              var j = JSON.parse(e.data);
+              if (j && j.text && !srHadText) {
+                /* 增量文本追加（流式已提交文本不回改） */
+                if (fullText && fullText.slice(-1) !== '\n' && j.text.charAt(0) !== '，' && j.text.charAt(0) !== '。') {
+                  /* 直接顺序拼接即可 */
+                }
+                fullText += j.text;
+                count();
+                srHadText = true; /* 流式已出字：分片/SR 通道让位 */
+                say('流式转写中…');
+                if (typeof opts.onStream === 'function') opts.onStream(j.text, fullText);
+              }
+            } catch (err) {}
+          };
+          ws.onerror = function () { if (live && !asrActive && !srHadText) say('流式服务不可用，使用分片转写'); };
+          ws.onclose = function () { wsLive = false; };
+        }).catch(function () {});
+      }
+      function stopStreamWS() {
+        wsLive = false;
+        if (archRec && archRec.state !== 'inactive') { try { archRec.stop(); } catch (e) {} }
+        archRec = null;
+        if (wsProc) { try { wsProc.disconnect(); } catch (e) {} wsProc = null; }
+        if (wsSrc) { try { wsSrc.disconnect(); } catch (e) {} wsSrc = null; }
+        if (wsAudioCtx) { try { wsAudioCtx.close(); } catch (e) {} wsAudioCtx = null; }
+        if (wsStream) { wsStream.getTracks().forEach(function (t) { t.stop(); }); wsStream = null; }
+        if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+      }
+
       var inst = {
         isRecording: function () { return live; },
+        durationSec: function () { return Math.round((Date.now() - (window._recStartAt || Date.now())) / 1000); },
         text: function () { return fullText; },
         destroy: function () { if (live) btn.onclick(); host._recorderInst = null; }
       };

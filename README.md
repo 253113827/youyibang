@@ -168,3 +168,9 @@
 - **部署**：M5 MAX `~/r2t2_server.py`（OpenAI 兼容端口 18780，模型本地缓存离线运行）+ `~/asr_tunnel_keeper.sh`（隧道守护）
 - **容灾**：$ASR_ENDPOINTS 顺序 R2T2(隧道) → whisper base(服务器本机) —— M5 关机时自动回退 whisper
 - whisper 输出的流式尾部 `|` 已在后端 trim
+
+### 实时转写性能结论与升级路径（2026-11-11 晚）
+- 实测：M5 MAX 上 R2T2 转写 2s 音频仅 **0.12s**（MPS），瓶颈在攒片等待与网络往返 → 分片已缩至 2s（端到端滞后 ~3s）
+- **真流式（亚秒）需要 NVIDIA GPU**：R2T2 的 `streaming_transcribe` 仅支持 vLLM 后端（源码明确 raise），transformers/MPS 不支持；官方 ws_server 亦 vLLM-only
+- **升级路径已预铺**：nginx `/asr-ws` WebSocket 代理（→隧道→M5:18782）已就位；将来部署 NVIDIA 设备跑官方 ws_server 只需改隧道指向，前端协议不变
+- 多人对话：实时层用行首 [医]/[患] 手动标注；离线层后续接入 Nemotron 3.5 自动说话人分离（需 NVIDIA GPU）

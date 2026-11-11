@@ -13,9 +13,9 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>有医帮 - 接诊工作台</title>
 <link rel="stylesheet" href="assets/style.css">
-<script src="assets/speech.js?v=2"></script>
+<script src="assets/speech.js?v=3"></script>
 <script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
-<script src="assets/recorder.js?v=7"></script>
+<script src="assets/recorder.js?v=8"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
@@ -376,6 +376,7 @@ table.rx .rowdel:hover { color:var(--danger); }
   <div class="tabs rtop">
     <button class="on" data-rtab="dx" onclick="rTab(this)">智能诊断</button>
     <button data-rtab="hist" onclick="rTab(this)">患者历史</button>
+    <button data-rtab="rec" onclick="rTab(this);loadRecordings()">录音档案</button>
   </div>
   <div id="rtab-dx">
     <div style="display:flex;gap:6px;margin:8px 0;align-items:center;flex-wrap:wrap">
@@ -387,6 +388,10 @@ table.rx .rowdel:hover { color:var(--danger); }
     <div id="aiResult"></div>
   </div>
   <div id="rtab-hist" style="display:none"><div id="ptHist">（先选择患者）</div></div>
+  <div id="rtab-rec" style="display:none">
+    <div class="hint" style="margin:6px 0">问诊录音归档（医疗留档）：录音结束自动上传；逐字稿可修正；行首标注 [医]/[患] 区分说话人</div>
+    <div id="recList">（先选择患者）</div>
+  </div>
 </div>
 </div>
 
@@ -926,6 +931,46 @@ function rTab(btn) {
   document.querySelectorAll('.col.right .tabs button').forEach(b => b.classList.toggle('on', b === btn));
   $('rtab-dx').style.display = btn.dataset.rtab === 'dx' ? 'block' : 'none';
   $('rtab-hist').style.display = btn.dataset.rtab === 'hist' ? 'block' : 'none';
+  $('rtab-rec').style.display = btn.dataset.rtab === 'rec' ? 'block' : 'none';
+  if (btn.dataset.rtab === 'rec' && CUR.visit) loadRecordings();
+}
+/* ---------- 录音档案：列表/回放/逐字稿修正 ---------- */
+function loadRecordings() {
+  if (!CUR.visit) { $('recList').innerHTML = '<p class="hint">（先选择患者）</p>'; return; }
+  fetch(A + 'recording_list&visit_id=' + CUR.visit).then(r => r.json()).then(j => {
+    if (!j.ok) { $('recList').innerHTML = '<p class="hint">' + esc(j.error || '加载失败') + '</p>'; return; }
+    if (!(j.recordings || []).length) { $('recList').innerHTML = '<p class="hint">暂无录音。点上方 🎤 开始问诊录音，结束后自动归档。</p>'; return; }
+    $('recList').innerHTML = j.recordings.map(r =>
+      `<div class="aibox" style="border-bottom:1px solid #f0f0f0">
+        <div style="font-size:12px;color:#99a1ad;margin-bottom:4px">#${r.id} · ${esc((r.created_at || '').slice(0, 16))} · ${r.duration_sec || 0}s</div>
+        <audio controls style="width:100%;height:32px" src="${esc(r.url)}"></audio>
+        <textarea id="rt_${r.id}" rows="4" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #e0e0e0;border-radius:4px;font:inherit;font-size:12px;padding:4px 6px" placeholder="逐字稿（可修正，行首标注 [医]/[患] 区分说话人）">${esc(r.transcript || '')}</textarea>
+        <div style="text-align:right;margin-top:2px"><button class="btn outline sm" onclick="saveRecTranscript(${r.id})">💾 保存逐字稿</button></div>
+      </div>`).join('');
+  }).catch(() => { $('recList').innerHTML = '<p class="hint">加载失败</p>'; });
+}
+function saveRecTranscript(rid) {
+  const txt = document.getElementById('rt_' + rid).value;
+  const fd = new FormData(); fd.append('rec_id', rid); fd.append('transcript', txt);
+  fetch(A + 'save_recording_transcript', { method: 'POST', body: fd }).then(r => r.json()).then(j => {
+    alert(j.ok ? '逐字稿已保存' : (j.error || '保存失败'));
+  });
+}
+/* 录音结束自动归档上传（由 onStop 回调触发） */
+async function uploadRecording(blob, fullText) {
+  if (!blob || !CUR.visit) return;
+  const fd = new FormData();
+  fd.append('visit_id', CUR.visit);
+  fd.append('audio', blob, 'visit.webm');
+  fd.append('duration', Math.round((window._recDuration || 0)));
+  try {
+    const r = await fetch(A + 'upload_recording', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.ok) {
+      if (fullText) { const fd2 = new FormData(); fd2.append('rec_id', j.rec_id); fd2.append('transcript', fullText); await fetch(A + 'save_recording_transcript', { method: 'POST', body: fd2 }); }
+      loadRecordings();
+    }
+  } catch (e) {}
 }
 
 /* ---------- 打印 / 完成 / 建患者 / 编辑患者 ---------- */
@@ -975,13 +1020,20 @@ function recorderInit() {
   const mount = $('recMount');
   if (!window.Recorder) return; /* recorder.js 未加载（理论不会） */
   REC = window.Recorder.mount(mount, {
-    asr: { enabled: window.YYB_ASR === true, url: A + 'asr_chunk' },
+    asr: { enabled: window.YYB_ASR === true, url: A + 'asr_chunk', wsUrl: 'wss://' + location.host + '/asr-ws' },
     onFinal: function (fin) {
       /* final 结果追加进「转写全文」可编辑框（interim 由组件自身实时区显示） */
       const el = $('f_transcript');
       el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + fin;
     },
-    onStop: function () { $('orgNote').textContent = '录音结束，可编辑转写后点击「整理成病历」'; }
+    onStop: function (fullText, blob) {
+      $('orgNote').textContent = '录音结束，可编辑转写后点击「整理成病历」';
+      /* 录音归档：整段音频上传 + 转写随存（可回放/修正） */
+      if (blob && blob.size > 2000) {
+        window._recDuration = (window.REC && REC.durationSec) ? REC.durationSec() : 0;
+        uploadRecording(blob, fullText);
+      }
+    }
   });
   if (!REC) mount.innerHTML = '<span class="hint">当前浏览器不支持语音录音，请手动输入</span>';
 }
