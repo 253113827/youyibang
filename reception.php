@@ -28,7 +28,7 @@ textarea { resize: vertical; }
 
 /* ===== 顶部导航栏（深蓝） ===== */
 .navbar { display:flex; gap:2px; align-items:center; background:var(--nav-blue); color:#fff; padding:0 14px; height:46px; position:sticky; top:0; z-index:50; box-shadow:0 1px 4px rgba(0,0,0,.15); }
-.navbar .logo { display:inline-flex; align-items:center; justify-content:center; width:34px; height:26px; background:#fff; color:var(--nav-blue); border-radius:6px; font-weight:800; font-size:13px; margin-right:10px; letter-spacing:.5px; }
+.navbar .logo { display:inline-flex; align-items:center; justify-content:center; min-width:34px; height:26px; background:#fff; color:var(--nav-blue); border-radius:6px; font-weight:800; font-size:13px; margin-right:10px; letter-spacing:.5px; white-space:nowrap; padding:0 6px; }
 .navbar .clinic { font-weight:700; font-size:14px; margin-right:18px; }
 .navbar .clinic::after { content:' ▾'; font-size:10px; opacity:.7; }
 .navbar a, .navbar span.mod { color:#c9d8ef; text-decoration:none; padding:5px 11px; border-radius:4px; font-size:13px; position:relative; cursor:pointer; }
@@ -216,42 +216,81 @@ table.rx .rowdel:hover { color:var(--danger); }
 .modal label.fl input, .modal label.fl select, .modal label.fl textarea { width:100%; box-sizing:border-box; margin-top:3px; padding:6px 8px; border:1px solid #d9d9d9; border-radius:4px; font:inherit; }
 
 /* ===== 移动端 ===== */
-.mview { display:none; gap:6px; margin:6px; }
-.mview button { flex:1; }
+.mview { display:none; gap:6px; margin:6px; position:sticky; top:46px; z-index:45; }
+.mview button { flex:1; padding:9px 0; font-size:14px; }
 @media (max-width: 900px) {
-  .workspace { display:block; height:auto; }
-  .col.left, .col.right { display:none; }
+  /* 装饰性无功能元素隐藏 */
+  .desk-only { display:none !important; }
+  /* 视图切换：单栏 + 底部式切换按钮 */
+  .workspace { display:block; height:auto; padding-bottom:70px; }
+  .col.left, .col.right { display:none; border:0; }
   body[data-view="queue"] .col.left { display:block; }
   body[data-view="dx"] .col.right { display:block; }
-  .mview { display:flex; }
-  .subbar { flex-wrap:wrap; }
+  .mview { display:flex; top:44px; }
+  /* 导航栏精简 */
+  .navbar { padding:0 10px; height:44px; }
+  .navbar .clinic { margin-right:6px; font-size:13px; }
+  .navbar a { padding:5px 8px; }
+  .subbar { position:static; flex-wrap:wrap; padding:6px 8px; }
+  .subbar .search { flex:1; min-width:150px; }
+  .subbar .search input { width:100%; }
+  .subbar .actions { margin-left:0; flex-wrap:wrap; }
+  /* 列间距紧凑 */
+  .col.mid { padding:0 8px 30px; }
+  .col.left { padding:6px 0; }
+  .col.right { padding:8px; }
+  /* 患者条 */
+  .ptbar .actions { margin-left:0; width:100%; }
+  .ptbar .actions .btn { flex:1; }
+  /* 语音条纵向堆叠 */
+  .voicebar { flex-direction:column; }
+  .vb-left { display:flex; justify-content:center; width:100%; }
+  /* 处方表横向滚动，不挤爆 */
+  .rxsheet { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  table.rx { min-width:640px; }
+  /* 病历表单标签列收窄 */
+  .frow2 { grid-template-columns: 78px 1fr; }
+  /* 弹窗全宽 */
+  .modal .box { width:94vw; padding:14px; }
+  /* AI 卡片行距 */
+  .airow { flex-wrap:wrap; }
+  /* 顶部 sticky 让位：mview 在 navbar(44px) 之下 */
+}
+@media (max-width: 480px) {
+  body { font-size:14px; } /* 提升 iOS 缩放可读性 */
+  .btn { padding:8px 12px; }
+  .btn.sm { padding:6px 10px; }
+  .frow2 { grid-template-columns: 70px 1fr; }
+  .frow2 .mic-btn { position:static; transform:none; margin-top:4px; display:inline-block; }
+  .ptbar b { font-size:15px; }
+  .subbar .actions .btn { padding:7px 8px; }
 }
 </style>
 </head>
 <body data-view="mid">
-<div class="mview" style="display:none">
-  <button class="btn gray sm" onclick="document.body.dataset.view='queue'">队列</button>
-  <button class="btn primary sm" onclick="document.body.dataset.view='mid'">接诊</button>
-  <button class="btn gray sm" onclick="document.body.dataset.view='dx'">AI/历史</button>
-</div>
-
 <nav class="navbar">
   <span class="logo">有医帮</span>
   <span class="clinic">仁和堂诊所</span>
   <a class="act" href="reception.php">门诊</a>
   <a href="index.php">医案问诊</a>
-  <span class="mod dis">预约</span><span class="mod dis">收费</span><span class="mod dis">药房</span><span class="mod dis">执行</span><span class="mod dis">检查</span><span class="mod dis">库存<sup>1</sup></span><span class="mod dis">患者管理<sup>20</sup></span><span class="mod dis">微信</span><span class="mod dis">管理</span><span class="mod dis">更多 ▾</span><span class="mod dis">商城</span>
+  <span class="desk-only"><span class="mod dis">预约</span><span class="mod dis">收费</span><span class="mod dis">药房</span><span class="mod dis">执行</span><span class="mod dis">检查</span><span class="mod dis">库存<sup>1</sup></span><span class="mod dis">患者管理<sup>20</sup></span><span class="mod dis">微信</span><span class="mod dis">管理</span><span class="mod dis">更多 ▾</span><span class="mod dis">商城</span></span>
   <span class="right">
-    <span class="ritem">🛡 医保端</span><span class="ritem">❓ 帮助</span><span class="ritem" onclick="logout()">退出</span>
+    <span class="desk-only ritem">🛡 医保端</span><span class="desk-only ritem">❓ 帮助</span><span class="ritem" onclick="logout()">退出</span>
     <span class="avatar-mini">医</span>
   </span>
 </nav>
 
+<div class="mview">
+  <button class="btn gray sm" onclick="document.body.dataset.view='queue'">队列</button>
+  <button class="btn primary sm" onclick="document.body.dataset.view='mid'">接诊</button>
+  <button class="btn gray sm" onclick="document.body.dataset.view='dx'">AI/历史</button>
+</div>
+
 <div class="subbar">
   <div class="search"><input id="qsearch" placeholder="姓名/手机/项目/单号" oninput="renderQueue()"></div>
   <button class="btn green" style="border-radius:4px" onclick="openNewPt()">＋接诊</button>
-  <span class="crumb"><b>门诊</b>　<em>第1次就诊【预约：转诊自康乐诊所】</em></span>
-  <div class="rtabs">
+  <span class="crumb desk-only"><b>门诊</b>　<em>第1次就诊【预约：转诊自康乐诊所】</em></span>
+  <div class="rtabs desk-only">
     <span>💬 会话</span><span>历史 <sup>5</sup></span><span>影像 <sup>3</sup></span><span class="on">AI诊断</span>
   </div>
   <div class="actions">
@@ -274,7 +313,7 @@ table.rx .rowdel:hover { color:var(--danger); }
   <div id="todayList"></div>
   <div class="qsec" style="margin-top:8px">历史就诊</div>
   <div id="histList"></div>
-  <div class="tools">
+  <div class="tools desk-only">
     <div class="tt"><span class="ticon b1">📢</span>叫号<span class="sub">下一位：王莹 ›</span></div>
     <div class="tt"><span class="ticon b2">📊</span>工作汇总<span class="sub">汇总工作报表 ›</span></div>
     <div class="tt"><span class="ticon b3">📅</span>预约看板<span class="sub">患者预约一览 ›</span></div>
@@ -283,7 +322,7 @@ table.rx .rowdel:hover { color:var(--danger); }
 
 <!-- 中栏：病历+处方 -->
 <div class="col mid">
-  <div class="ptbar" id="ptbar">未选择患者（左侧点击「今天」列表）</div>
+  <div class="ptbar" id="ptbar">未选择患者（点底部「队列」选择患者）</div>
   <div id="recForm" style="display:none">
   <!-- 语音问诊横条 -->
   <div class="voicebar" id="voiceBar">
