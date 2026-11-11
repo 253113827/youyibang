@@ -53,6 +53,7 @@
         '<button type="button" class="rc-btn" aria-label="开始录音">🎤</button>' +
         '<span class="rc-timer">00:00</span>' +
         '<canvas class="rc-wave" width="160" height="36"></canvas>' +
+        '<label class="rc-far" title="多人/远距离场景：关闭降噪并增益放大远端人声"><input type="checkbox"> 远距增强</label>' +
         '<span class="rc-status"></span>' +
         '</div>' +
         '<div class="rc-interim-row"><span class="rc-interim-label">实时转写：</span><span class="rc-interim"></span></div>' +
@@ -60,6 +61,7 @@
       host.appendChild(root);
 
       var btn = root.querySelector('.rc-btn');
+      var farChk = root.querySelector('.rc-far input');
       var timerEl = root.querySelector('.rc-timer');
       var canvas = root.querySelector('.rc-wave');
       var statusEl = root.querySelector('.rc-status');
@@ -97,7 +99,7 @@
       }
       function startRealWave() {
         if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { startFakeWave(); return; }
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        navigator.mediaDevices.getUserMedia(farConstraints()).then(function (s) {
           stream = s;
           audioCtx = new AC();
           var src = audioCtx.createMediaStreamSource(s);
@@ -143,6 +145,35 @@
         timer = setInterval(function () { secs++; timerEl.textContent = fmt(secs); }, 1000);
       }
       function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
+
+      /* ---- 远距增强（多人/远距离场景）----
+       * 原理：浏览器默认 noiseSuppression 会把远距离人声当稳态噪声压掉；
+       * 关闭 NS + 数字增益放大 + 动态压缩，可显著提升 1-3 米外人声识别率 */
+      function farMode() { return farChk && farChk.checked; }
+      function farConstraints() {
+        var far = farMode();
+        return {
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: !far,        /* 远距模式关降噪，保住远端人声 */
+            autoGainControl: true,
+            channelCount: 1
+          }
+        };
+      }
+      /* 在 ctx 上构建 增益→压缩 链，返回 {input, output}；gain 值随勾选实时变化 */
+      function makeBoost(ctx) {
+        var gain = ctx.createGain(), comp = ctx.createDynamicsCompressor();
+        function apply() {
+          gain.gain.value = farMode() ? 6 : 1;   /* 远距模式 +6 倍增益 */
+          comp.threshold.value = -50; comp.knee.value = 20;
+          comp.ratio.value = 8; comp.attack.value = 0.01; comp.release.value = 0.25;
+        }
+        apply();
+        if (farChk) farChk.addEventListener('change', apply);
+        gain.connect(comp);
+        return { input: gain, output: comp };
+      }
 
       /* ---- 通道2：云端分片转写（不依赖浏览器 SR，任何网络可用） ---- */
       function appendFinal(t) {
@@ -198,11 +229,12 @@
         if (!navigator.mediaDevices || !(window.AudioContext || window.webkitAudioContext)) { say('当前浏览器不支持录音分片'); return; }
         say('分片通道启动中…');
         var AC2 = window.AudioContext || window.webkitAudioContext;
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        navigator.mediaDevices.getUserMedia(farConstraints()).then(function (s) {
           if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
           asrStream = s;
           asrCtx = new AC2();
           asrSrc = asrCtx.createMediaStreamSource(s);
+          var boost = makeBoost(asrCtx); /* 远距增益链 */
           asrProc = asrCtx.createScriptProcessor(4096, 1, 1);
           var mute = asrCtx.createGain(); mute.gain.value = 0;
           asrBuf = []; asrBufLen = 0; asrMuted = false;
@@ -219,7 +251,7 @@
               uploadChunk(encodeWAV(merged, asrCtx.sampleRate));
             }
           };
-          asrSrc.connect(asrProc);
+          asrSrc.connect(boost.input); boost.output.connect(asrProc);
           asrProc.connect(mute); mute.connect(asrCtx.destination);
           asrActive = true;
           say('云端分片转写中…');
@@ -322,23 +354,9 @@
       var archRec = null, archChunks = [];
       function startStreamWS() {
         if (!asrCfg || !asrCfg.wsUrl || !window.WebSocket || !navigator.mediaDevices) return;
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        navigator.mediaDevices.getUserMedia(farConstraints()).then(function (s) {
           if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
           wsStream = s;
-          /* 整段归档录音：与流式共用同一路麦克风 */
-          try {
-            archChunks = [];
-            archRec = new MediaRecorder(s);
-            archRec.ondataavailable = function (e) { if (e.data && e.data.size) archChunks.push(e.data); };
-            archRec.onstop = function () {
-              if (archChunks.length) {
-                var types = archChunks.map(function (c) { return c.type; });
-                window._lastRecBlob = new Blob(archChunks, { type: types[0] || 'audio/webm' });
-              }
-              archChunks = [];
-            };
-            archRec.start();
-          } catch (e) { archRec = null; }
           ws.binaryType = 'arraybuffer';
           ws.onopen = function () {
             if (!live) return;
@@ -347,8 +365,25 @@
             var AC2 = window.AudioContext || window.webkitAudioContext;
             wsAudioCtx = new AC2();
             wsSrc = wsAudioCtx.createMediaStreamSource(s);
+            var wboost = makeBoost(wsAudioCtx); /* 远距增益链 */
             wsProc = wsAudioCtx.createScriptProcessor(4096, 1, 1);
             var mute = wsAudioCtx.createGain(); mute.gain.value = 0;
+            /* 整段归档录音：录「增益后」的混音流，存档音量与识别一致 */
+            try {
+              var wsDest = wsAudioCtx.createMediaStreamDestination();
+              wboost.output.connect(wsDest);
+              archChunks = [];
+              archRec = new MediaRecorder(wsDest.stream);
+              archRec.ondataavailable = function (e) { if (e.data && e.data.size) archChunks.push(e.data); };
+              archRec.onstop = function () {
+                if (archChunks.length) {
+                  var types = archChunks.map(function (c) { return c.type; });
+                  window._lastRecBlob = new Blob(archChunks, { type: types[0] || 'audio/webm' });
+                }
+                archChunks = [];
+              };
+              archRec.start();
+            } catch (e) { archRec = null; }
             var downCnt = 0;
             wsProc.onaudioprocess = function (e) {
               if (!wsLive) return;
@@ -361,7 +396,7 @@
               }
               if (ws.readyState === 1) ws.send(pcm.buffer);
             };
-            wsSrc.connect(wsProc); wsProc.connect(mute); mute.connect(wsAudioCtx.destination);
+            wsSrc.connect(wboost.input); wboost.output.connect(wsProc); wsProc.connect(mute); mute.connect(wsAudioCtx.destination);
           };
           ws.onmessage = function (e) {
             try {

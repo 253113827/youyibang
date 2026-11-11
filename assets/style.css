@@ -76,6 +76,10 @@ label{display:block;font-size:13px;color:#555}
 .recorder .rc-timer{font-family:monospace;font-size:16px;color:#333;min-width:48px}
 .recorder .rc-wave{height:36px;flex:1;min-width:120px}
 .recorder .rc-status{font-size:12px;color:#c0392b}
+.recorder .rc-far{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:#1f6f43;cursor:pointer;user-select:none;white-space:nowrap}
+.recorder .rc-far input{accent-color:#1f6f43;cursor:pointer}
+.recorder .rc-far:hover{filter:brightness(1.1)}
+.recorder.compact .rc-far{display:none}
 .recorder .rc-interim-row{margin-top:6px;font-size:13px;color:#999}
 .recorder .rc-interim{font-style:italic;color:#888;min-height:1em;display:inline-block}
 .recorder .rc-count{margin-top:2px}
