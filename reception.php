@@ -1,6 +1,7 @@
 <?php
-/* 有医帮 - 门诊接诊工作台（三栏：队列 | 病历处方 | AI诊断/患者历史）
- * v2：中医四诊勾选面板 / 语音转文字 / 处方签步进器 / 黄色高亮编辑区 / AI 症状 chip */
+/* 有医帮 - 门诊接诊工作台（1:1 还原 ABC诊所管家 UI）
+ * 布局：深蓝导航栏 | 左栏患者队列 | 中栏病历处方（黄色编辑区） | 右栏智能诊断
+ * v3：按截图还原 UI，功能逻辑（JS/API/ID）不变 */
 require __DIR__ . '/config.php';
 need_login();
 $uid = (int)($_SESSION['uid'] ?? 1);
@@ -15,147 +16,307 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <script src="assets/speech.js"></script>
 <script src="assets/recorder.js"></script>
 <style>
-body { margin:0; font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f0f2f5; }
-.navbar { display:flex; gap:4px; align-items:center; background:#1f6f43; color:#fff; padding:0 12px; height:44px; position:sticky; top:0; z-index:50; }
-.navbar .logo { font-weight:700; margin-right:14px; }
-.navbar a, .navbar span.mod { color:#d6efe0; text-decoration:none; padding:6px 10px; border-radius:6px; font-size:13px; }
-.navbar a.act { background:#2e9159; color:#fff; }
-.navbar .mod.dis { opacity:.45; cursor:not-allowed; }
-.navbar .right { margin-left:auto; }
-.workspace { display:grid; grid-template-columns: 280px 1fr 320px; gap:10px; padding:10px; height:calc(100vh - 44px); box-sizing:border-box; }
-.col { background:#fff; border-radius:10px; overflow:auto; padding:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
-.col h3 { margin:4px 0 8px; font-size:14px; color:#333; }
-.qitem { padding:8px 10px; border-radius:8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border:1px solid transparent; }
-.qitem:hover { background:#f5faf7; }
-.qitem.sel { border-color:#1f6f43; background:#eaf6ef; }
-.avatar { width:30px; height:30px; border-radius:50%; background:#1f6f43; color:#fff; display:inline-flex; align-items:center; justify-content:center; margin-right:8px; font-size:13px; flex:none; }
-.tag { font-size:11px; padding:2px 8px; border-radius:10px; }
-.tag.waiting { background:#e6f0ff; color:#2563eb; } .tag.in_visit { background:#fff7e6; color:#d48806; } .tag.done { background:#f0f0f0; color:#888; }
-.qname { display:flex; align-items:center; flex:1; min-width:0; }
-.qmeta { font-size:12px; color:#666; }
-.btn { background:#1f6f43; color:#fff; border:0; border-radius:6px; padding:7px 14px; cursor:pointer; font-size:13px; }
-.btn.gray { background:#6b7280; } .btn.red { background:#c0392b; } .btn.blue { background:#2563eb; } .btn.ghost { background:#fff; color:#1f6f43; border:1px solid #1f6f43; }
-.btn.sm { padding:4px 10px; font-size:12px; }
-.ptbar { display:flex; align-items:center; gap:10px; padding:8px 10px; background:#eaf6ef; border-radius:8px; margin-bottom:10px; flex-wrap:wrap; }
-.ptbar b { font-size:15px; }
-.ptbar .actions { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
-.frow { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-label.fl { display:block; margin-bottom:8px; font-size:13px; color:#333; }
-label.fl textarea, label.fl input, label.fl select { width:100%; box-sizing:border-box; margin-top:3px; padding:6px 8px; border:1px solid #d9d9d9; border-radius:6px; font:inherit; }
-textarea { resize:vertical; }
-/* 黄色高亮编辑区（对齐 ABC 诊所管家截图） */
-.editzone { background:#fffbe6; border:2px solid #fadb14; border-radius:8px; padding:8px; margin-bottom:10px; }
-.editzone label.fl:last-child { margin-bottom:0; }
-.pe3 { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.pe3 input { width:90px !important; }
-.pe3 span { font-size:12px; color:#666; }
-/* 语音按钮 */
-.mic-btn { background:#eef7f1; border:1px solid #bcd9c8; border-radius:6px; margin-left:4px; padding:4px 7px; cursor:pointer; font-size:13px; line-height:1; }
-.mic-btn.rec { background:#1f6f43; color:#fff; animation:pulse 1.2s infinite; }
-@keyframes pulse { 50% { opacity:.55; } }
-/* 中医四诊勾选面板 */
-details.tcm { border:1px solid #d9e5dd; border-radius:8px; margin-bottom:10px; background:#fbfdfc; }
-details.tcm summary { cursor:pointer; font-weight:700; font-size:13px; padding:8px 10px; color:#1f6f43; }
+:root {
+  --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
+  --danger: #c0392b; --edit-bg: #fffbe6; --edit-border: #f0e1a8; --line: #e8e8e8;
+}
+* { box-sizing: border-box; }
+body { margin:0; font:13px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#eef1f6; color:#333; }
+button { font-family: inherit; }
+textarea { resize: vertical; }
+
+/* ===== 顶部导航栏（深蓝） ===== */
+.navbar { display:flex; gap:2px; align-items:center; background:var(--nav-blue); color:#fff; padding:0 14px; height:46px; position:sticky; top:0; z-index:50; box-shadow:0 1px 4px rgba(0,0,0,.15); }
+.navbar .logo { display:inline-flex; align-items:center; justify-content:center; width:34px; height:26px; background:#fff; color:var(--nav-blue); border-radius:6px; font-weight:800; font-size:13px; margin-right:10px; letter-spacing:.5px; }
+.navbar .clinic { font-weight:700; font-size:14px; margin-right:18px; }
+.navbar .clinic::after { content:' ▾'; font-size:10px; opacity:.7; }
+.navbar a, .navbar span.mod { color:#c9d8ef; text-decoration:none; padding:5px 11px; border-radius:4px; font-size:13px; position:relative; cursor:pointer; }
+.navbar a:hover { color:#fff; }
+.navbar a.act { background:rgba(255,255,255,.18); color:#fff; font-weight:600; }
+.navbar .mod sup { background:#ff4d4f; color:#fff; font-size:9px; border-radius:8px; padding:0 4px; margin-left:2px; }
+.navbar .mod.dis { opacity:.55; }
+.navbar .right { margin-left:auto; display:flex; align-items:center; gap:10px; }
+.navbar .right .ritem { color:#c9d8ef; font-size:12px; cursor:pointer; }
+.navbar .right .ritem:hover { color:#fff; }
+.navbar .avatar-mini { width:26px; height:26px; border-radius:50%; background:#5b8bd0; display:inline-flex; align-items:center; justify-content:center; font-size:12px; }
+
+/* ===== 次级工具条 ===== */
+.subbar { display:flex; align-items:center; gap:8px; background:#fff; padding:8px 14px; border-bottom:1px solid var(--line); position:sticky; top:46px; z-index:40; }
+.subbar .search { display:flex; align-items:center; gap:0; }
+.subbar .search input { width:220px; padding:6px 10px; border:1px solid #d9d9d9; border-radius:4px 0 0 4px; font:inherit; outline:none; }
+.subbar .search input:focus { border-color:var(--primary); }
+.btn-jz { background:var(--green); color:#fff; border:0; border-radius:0 4px 4px 0; padding:7px 12px; cursor:pointer; font-size:13px; white-space:nowrap; }
+.subbar .crumb { margin-left:10px; font-size:13px; }
+.subbar .crumb b { color:#333; font-size:14px; }
+.subbar .crumb em { font-style:normal; color:#999; font-size:12px; }
+.subbar .rtabs { margin-left:auto; display:flex; align-items:center; gap:2px; }
+.subbar .rtabs span { font-size:12px; color:#666; padding:4px 10px; cursor:pointer; border-radius:4px; position:relative; }
+.subbar .rtabs span.on { color:var(--primary); font-weight:600; }
+.subbar .rtabs span sup { color:#ff4d4f; font-size:10px; }
+.subbar .actions { display:flex; gap:6px; margin-left:14px; }
+
+/* ===== 按钮 ===== */
+.btn { border:1px solid transparent; border-radius:4px; padding:6px 14px; cursor:pointer; font-size:13px; background:#fff; color:#333; }
+.btn.primary { background:var(--primary); color:#fff; }
+.btn.primary:hover { background:#1f6bd0; }
+.btn.outline-blue { border-color:var(--primary); color:var(--primary); background:#fff; }
+.btn.outline { border-color:#d9d9d9; color:#333; background:#fff; }
+.btn.green { background:var(--green); color:#fff; }
+.btn.gray { background:#f5f5f5; color:#666; border-color:#d9d9d9; }
+.btn.red { background:var(--danger); color:#fff; }
+.btn.sm { padding:3px 10px; font-size:12px; }
+.btn.ghost { background:#fff; color:var(--primary); border:1px solid var(--primary); }
+
+/* ===== 三栏工作区 ===== */
+.workspace { display:grid; grid-template-columns: 250px 1fr 310px; gap:0; height:calc(100vh - 88px); }
+.col { overflow-y:auto; background:#fff; }
+.col.left { border-right:1px solid var(--line); padding:10px 0; }
+.col.mid { padding:0 14px 30px; }
+.col.right { border-left:1px solid var(--line); padding:10px; }
+
+/* ===== 左栏：患者队列 ===== */
+.qhead { display:flex; align-items:center; padding:2px 12px 8px; }
+.qhead b { color:var(--primary); font-size:14px; }
+.qhead .qtoday { margin-left:12px; color:#999; font-size:12px; }
+.qsearch-row { display:flex; gap:6px; padding:0 12px 10px; }
+.qsearch-row input { flex:1; min-width:0; padding:6px 9px; border:1px solid #d9d9d9; border-radius:4px; font:inherit; outline:none; }
+.qsearch-row input:focus { border-color:var(--primary); }
+.qsec { padding:6px 12px 2px; font-size:12px; color:#999; }
+.qitem { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; border-left:2px solid transparent; }
+.qitem:hover { background:#f7f9fc; }
+.qitem.sel { background:#e8f1fd; border-left-color:var(--primary); }
+.avic { width:26px; height:26px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:#fff; flex:none; }
+.avic.m { background:#4a90d9; } .avic.f { background:#f0728f; }
+.qmain { flex:1; min-width:0; display:flex; flex-direction:column; }
+.qmain b { font-size:13px; font-weight:600; }
+.qmain .qdoc { font-size:11px; color:#00b578; }
+.qright { display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+.qright .qtime { font-size:11px; color:#999; }
+.st { font-size:12px; }
+.st.waiting, .st.in_visit { color:var(--primary); }
+.st.done { color:#bbb; }
+.histitem { padding:8px 14px; font-size:12px; border-bottom:1px solid #f5f5f5; }
+.histitem b { color:#333; }
+/* 小工具 */
+.tools { border-top:1px solid var(--line); margin-top:10px; padding:8px 0 0; }
+.tools .tt { padding:6px 14px; font-size:13px; color:#333; cursor:pointer; display:flex; align-items:center; gap:8px; }
+.tools .tt:hover { background:#f7f9fc; }
+.tools .tt .sub { margin-left:auto; font-size:11px; color:#bbb; }
+.tools .ticon { width:22px; height:22px; border-radius:5px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:#fff; }
+.ticon.b1 { background:#4a90d9; } .ticon.b2 { background:#00b578; } .ticon.b3 { background:#f5a623; }
+
+/* ===== 中栏：患者条 ===== */
+.ptbar { display:flex; align-items:center; gap:10px; padding:12px 4px; flex-wrap:wrap; border-bottom:1px solid var(--line); }
+.ptbar .gavic { width:30px; height:30px; border-radius:50%; background:#f0728f; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:14px; flex:none; }
+.ptbar b { font-size:16px; }
+.ptbar .meta { color:#666; font-size:13px; }
+.ptbar .doc-chip { color:#00b578; font-size:12px; background:#e8faf1; border-radius:3px; padding:2px 8px; }
+.ptbar .fee { color:#333; font-size:13px; }
+.ptbar .fee b { color:var(--danger); font-size:14px; }
+.ptbar .paytype { color:#999; font-size:12px; }
+.ptbar .actions { margin-left:auto; display:flex; gap:6px; }
+
+/* ===== 语音问诊条 ===== */
+.voicebar { display:flex; gap:10px; align-items:flex-start; background:#f7fafd; border:1px solid #dbe7f5; border-radius:6px; padding:8px; margin:10px 0; }
+.vb-left { flex:none; }
+.vb-right { flex:1; min-width:0; }
+
+/* ===== 病历表单：标签左 + 黄色编辑区右 ===== */
+.frow2 { display:grid; grid-template-columns: 100px 1fr; border-bottom:1px solid #f5eed3; }
+.frow2 > .flabel { padding:9px 6px 9px 2px; color:#99a1ad; font-size:12px; text-align:left; line-height:1.4; }
+.frow2 > .flabel small { font-size:10px; }
+.frow2 > .fval { background:var(--edit-bg); padding:6px 8px; position:relative; }
+.frow2 > .fval:focus-within { background:#fff8d9; }
+.frow2 .mic-btn { position:absolute; right:8px; top:50%; transform:translateY(-50%); margin:0; }
+.frow2 textarea, .frow2 input[type=text], .frow2 input:not([type]) { width:100%; border:0; background:transparent; font:inherit; color:#333; outline:none; padding:2px 0; }
+.frow2 .pe3 { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:2px 0; }
+.frow2 .pe3 input { width:64px; border:1px solid #e8d99a; background:#fff; border-radius:3px; padding:2px 6px; font:inherit; text-align:center; }
+.frow2 .pe3 span { color:#8a6d1a; font-size:12px; }
+.frow2 .auxline { display:flex; align-items:center; gap:8px; padding:2px 0; font-size:13px; }
+.frow2 .auxline .times { width:56px; text-align:center; border:1px solid #e8d99a; background:#fff; border-radius:3px; padding:2px 4px; font:inherit; }
+.frow2 .auxline .price { color:var(--danger); }
+.frow2 .auxline .del { color:#bbb; cursor:pointer; font-size:12px; border:0; background:none; padding:0 4px; }
+.frow2 .auxline .del:hover { color:var(--danger); }
+.frow2 input.dd-input { border:0; background:transparent; font:inherit; outline:none; color:#bbb; }
+.frow2 input.dd-input:focus { color:#333; }
+/* 中医四诊面板 */
+details.tcm { border:1px solid #d9e5dd; border-radius:6px; margin:10px 0; background:#fbfdfc; }
+details.tcm summary { cursor:pointer; font-weight:600; font-size:13px; padding:8px 10px; color:var(--nav-blue); }
 details.tcm .body { padding:4px 10px 10px; }
 .tcmgrp { margin-bottom:8px; }
 .tcmgrp > b { font-size:12px; color:#555; display:inline-block; min-width:64px; }
 .tcmrow { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin:3px 0 3px 8px; }
 .tcmrow .rl { font-size:11px; color:#888; min-width:56px; }
-.chip { display:inline-block; font-size:12px; padding:2px 10px; border-radius:12px; border:1px solid #cfd8d2; background:#fff; cursor:pointer; margin:1px 2px; user-select:none; }
-.chip.on { background:#1f6f43; border-color:#1f6f43; color:#fff; }
-.chip.sym { border-color:#bcd9c8; background:#eaf6ef; color:#1f6f43; cursor:pointer; }
-/* 处方签 */
-.tabs { display:flex; gap:4px; border-bottom:2px solid #1f6f43; margin-bottom:8px; flex-wrap:wrap; }
-.tabs button { border:0; background:#e8ebe9; padding:5px 12px; cursor:pointer; border-radius:6px 6px 0 0; font-size:12px; }
-.tabs button.on { background:#1f6f43; color:#fff; }
-table.rx { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:6px; }
-table.rx th, table.rx td { border:1px solid #e0e0e0; padding:3px 5px; }
-table.rx th { background:#f5f5f5; font-weight:600; }
-table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing:border-box; background:transparent; }
-.rxtotal { text-align:right; font-weight:700; color:#c0392b; margin:4px 0 8px; }
+.chip { display:inline-block; font-size:12px; padding:2px 10px; border-radius:3px; border:1px solid #d3dce6; background:#fff; cursor:pointer; margin:1px 2px; user-select:none; color:#555; }
+.chip.on { background:var(--primary); border-color:var(--primary); color:#fff; }
+.chip.sym { border-color:#bcd9c8; background:#eefaf4; color:var(--green); cursor:pointer; }
+
+/* ===== 处方区 ===== */
+.rx-actions { display:flex; gap:8px; align-items:center; margin:12px 0 8px; flex-wrap:wrap; }
+.rx-actions .addsheet { background:#fff; border:1px solid #d9d9d9; border-radius:4px; padding:5px 12px; font-size:13px; cursor:pointer; color:#333; }
+.rx-actions .addsheet:hover { border-color:var(--primary); color:var(--primary); }
+.rx-actions .right { margin-left:auto; display:flex; gap:8px; }
+.rx-actions .tplbtn { background:none; border:0; color:#555; font-size:13px; cursor:pointer; }
+.rx-actions .tplbtn:hover { color:var(--primary); }
 .rxsheet { margin-bottom:10px; }
-.rxsheet .hd { display:flex; align-items:center; gap:8px; }
-.rxsub { text-align:right; font-size:12px; color:#c0392b; font-weight:600; }
-.step { display:inline-flex; align-items:center; gap:2px; }
-.step button { border:1px solid #ccc; background:#f7f7f7; width:18px; height:20px; line-height:1; cursor:pointer; font-size:12px; border-radius:4px; padding:0; }
-.step input { width:42px; text-align:center; }
+.rxsheet .hd { display:flex; align-items:center; gap:10px; padding:6px 0; }
+.rxsheet .hd .rxtag { font-weight:600; font-size:13px; }
+.rxsheet .hd .free { font-size:11px; color:#999; }
+.rxsheet .hd .addrow { margin-left:8px; }
+.rxsub { margin-left:auto; font-size:12px; color:var(--danger); font-weight:600; }
+table.rx { width:100%; border-collapse:collapse; font-size:12px; }
+table.rx th { border:0; border-bottom:1px solid var(--line); padding:6px 5px; color:#99a1ad; font-weight:400; text-align:left; white-space:nowrap; }
+table.rx td { border-bottom:1px solid #f5f5f5; padding:4px 5px; vertical-align:middle; }
+table.rx tr.hl td { background:#e8f1fd; }
+table.rx input, table.rx select { border:0; background:transparent; font:inherit; width:100%; min-width:0; outline:none; }
+table.rx input:focus, table.rx select:focus { background:#fff8d9; }
+table.rx .drugname { color:var(--primary); }
+table.rx .amount { color:#333; white-space:nowrap; }
+table.rx .rowdel { color:#bbb; cursor:pointer; font-size:14px; border:0; background:none; }
+table.rx .rowdel:hover { color:var(--danger); }
+.step { display:inline-flex; align-items:center; gap:1px; }
+.step button { border:1px solid #d9d9d9; background:#fff; width:20px; height:22px; line-height:1; cursor:pointer; font-size:12px; border-radius:3px 0 0 3px; padding:0; color:#666; }
+.step button + input, .step button + button { border-left:0; border-radius:0; }
+.step button:last-child { border-radius:0 3px 3px 0; }
+.step input { width:44px; text-align:center; border-top:1px solid #d9d9d9; border-bottom:1px solid #d9d9d9; height:22px; }
+.rxtotal-row { display:flex; justify-content:flex-end; padding:4px 8px; font-size:13px; color:#333; }
+.rxtotal-row b { color:var(--danger); font-size:15px; }
 .dd { position:relative; }
 .dd-list { position:absolute; z-index:30; background:#fff; border:1px solid #ddd; border-radius:6px; max-height:220px; overflow:auto; width:100%; box-shadow:0 4px 12px rgba(0,0,0,.12); }
 .dd-list div { padding:6px 10px; cursor:pointer; font-size:12px; }
-.dd-list div:hover { background:#eaf6ef; }
-.aibox { border:1px dashed #bbb; border-radius:8px; padding:10px; margin-bottom:10px; }
-.dxname { font-weight:700; color:#1f6f43; margin:6px 0 4px; }
-.pill { display:inline-block; background:#eaf6ef; color:#1f6f43; border-radius:12px; padding:2px 10px; font-size:11px; margin:2px 4px 2px 0; }
-.ai-note { font-size:11px; color:#999; }
-.airow { font-size:12px; margin:3px 0; }
-.airow b { color:#555; }
-.histitem { border-bottom:1px solid #f0f0f0; padding:8px 4px; font-size:12px; }
-.histitem b { color:#333; }
+.dd-list div:hover { background:#e8f1fd; }
+.mic-btn { background:#eef4fd; border:1px solid #c4d8f2; border-radius:4px; margin-left:4px; padding:4px 7px; cursor:pointer; font-size:13px; line-height:1; }
+.mic-btn.rec { background:var(--danger); color:#fff; animation:pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity:.55; } }
+.hint { font-size:11px; color:#999; }
+
+/* ===== 右栏：智能诊断（截图1样式） ===== */
+.tabs.rtop { display:flex; gap:18px; border-bottom:1px solid var(--line); padding:2px 4px; margin-bottom:6px; }
+.tabs.rtop button { border:0; background:none; font-size:14px; color:#666; cursor:pointer; padding:6px 2px; position:relative; }
+.tabs.rtop button.on { color:#333; font-weight:700; }
+.tabs.rtop button.on::after { content:''; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:var(--primary); }
+.aibox { border-bottom:1px solid #f0f0f0; padding:10px 4px; }
+.dxname { font-weight:700; font-size:14px; color:#333; margin-bottom:4px; display:flex; align-items:center; gap:6px; }
+.dxname .conf { font-size:10px; color:#fff; border-radius:3px; padding:1px 6px; font-weight:400; }
+.airow { font-size:12px; margin:4px 0; display:flex; align-items:flex-start; gap:6px; flex-wrap:wrap; }
+.airow > b { color:#99a1ad; font-weight:400; flex:none; line-height:22px; }
+.pill { display:inline-block; background:#f2f4f7; color:#555; border-radius:3px; padding:2px 8px; font-size:12px; margin:1px 2px 1px 0; }
+.chip.sym { margin:1px 2px 1px 0; }
+.pill.blue { background:#e8f1fd; color:var(--primary); }
+.ai-note { font-size:11px; color:#bbb; padding:8px 4px; }
+.pill.redf { background:#fff1f0; color:var(--danger); }
+
+/* ===== 弹窗 ===== */
 .modal { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:100; }
 .modal.show { display:flex; }
-.modal .box { background:#fff; border-radius:12px; padding:18px; width:360px; max-width:92vw; max-height:88vh; overflow:auto; }
-.modal h3 { margin-top:0; }
-.hint { font-size:11px; color:#999; }
-@media (max-width: 768px) {
-  .workspace { display:block; height:auto; padding:6px; }
-  .col { margin-bottom:8px; }
+.modal .box { background:#fff; border-radius:10px; padding:18px; width:380px; max-width:92vw; max-height:88vh; overflow:auto; }
+.modal h3 { margin-top:0; font-size:15px; }
+.modal label.fl { display:block; margin-bottom:10px; font-size:13px; color:#555; }
+.modal label.fl input, .modal label.fl select, .modal label.fl textarea { width:100%; box-sizing:border-box; margin-top:3px; padding:6px 8px; border:1px solid #d9d9d9; border-radius:4px; font:inherit; }
+
+/* ===== 移动端 ===== */
+.mview { display:none; gap:6px; margin:6px; }
+.mview button { flex:1; }
+@media (max-width: 900px) {
+  .workspace { display:block; height:auto; }
   .col.left, .col.right { display:none; }
   body[data-view="queue"] .col.left { display:block; }
   body[data-view="dx"] .col.right { display:block; }
-  .mview { display:flex; gap:6px; margin:6px; }
-  .mview button { flex:1; }
-  .frow { grid-template-columns:1fr; }
+  .mview { display:flex; }
+  .subbar { flex-wrap:wrap; }
 }
 </style>
 </head>
 <body data-view="mid">
 <div class="mview" style="display:none">
   <button class="btn gray sm" onclick="document.body.dataset.view='queue'">队列</button>
-  <button class="btn sm" onclick="document.body.dataset.view='mid'">接诊</button>
+  <button class="btn primary sm" onclick="document.body.dataset.view='mid'">接诊</button>
   <button class="btn gray sm" onclick="document.body.dataset.view='dx'">AI/历史</button>
 </div>
+
 <nav class="navbar">
   <span class="logo">有医帮</span>
+  <span class="clinic">仁和堂诊所</span>
   <a class="act" href="reception.php">门诊</a>
   <a href="index.php">医案问诊</a>
-  <span class="mod dis">预约</span><span class="mod dis">收费</span><span class="mod dis">药房</span><span class="mod dis">库存</span><span class="mod dis">统计</span>
-  <span class="right"><a href="logout.php">退出</a></span>
+  <span class="mod dis">预约</span><span class="mod dis">收费</span><span class="mod dis">药房</span><span class="mod dis">执行</span><span class="mod dis">检查</span><span class="mod dis">库存<sup>1</sup></span><span class="mod dis">患者管理<sup>20</sup></span><span class="mod dis">微信</span><span class="mod dis">管理</span><span class="mod dis">更多 ▾</span><span class="mod dis">商城</span>
+  <span class="right">
+    <span class="ritem">🛡 医保端</span><span class="ritem">❓ 帮助</span><span class="ritem" onclick="logout()">退出</span>
+    <span class="avatar-mini">医</span>
+  </span>
 </nav>
 
-<div class="workspace">
-<!-- 左栏：队列 -->
-<div class="col left">
-  <div style="display:flex;gap:6px;margin-bottom:8px">
-    <input id="qsearch" placeholder="搜索患者…" style="flex:1;padding:6px 8px;border:1px solid #d9d9d9;border-radius:6px" oninput="renderQueue()">
-    <button class="btn sm" onclick="openNewPt()">快速接诊</button>
+<div class="subbar">
+  <div class="search"><input id="qsearch" placeholder="姓名/手机/项目/单号" oninput="renderQueue()"></div>
+  <button class="btn green" style="border-radius:4px" onclick="openNewPt()">＋接诊</button>
+  <span class="crumb"><b>门诊</b>　<em>第1次就诊【预约：转诊自康乐诊所】</em></span>
+  <div class="rtabs">
+    <span>💬 会话</span><span>历史 <sup>5</sup></span><span>影像 <sup>3</sup></span><span class="on">AI诊断</span>
   </div>
-  <h3>今天</h3><div id="todayList"></div>
-  <h3 style="margin-top:12px">历史就诊</h3><div id="histList"></div>
+  <div class="actions">
+    <button class="btn outline-blue sm" onclick="saveOpd()">费用预览</button>
+    <button class="btn primary sm" onclick="saveOpd()">保存</button>
+    <button class="btn outline sm" onclick="cancelOpd()">取消</button>
+    <button class="btn outline sm" onclick="printOpd()">🖨 打印</button>
+  </div>
+</div>
+
+<div class="workspace">
+<!-- 左栏：患者队列 -->
+<div class="col left">
+  <div class="qhead"><b>门诊</b><span class="qtoday" id="qCount">0</span></div>
+  <div class="qsearch-row">
+    <input id="qsearch2" placeholder="搜索患者…" oninput="document.getElementById('qsearch').value=this.value;renderQueue()">
+    <button class="btn green sm" onclick="openNewPt()">快速接诊</button>
+  </div>
+  <div class="qsec">今天 · 全部</div>
+  <div id="todayList"></div>
+  <div class="qsec" style="margin-top:8px">历史就诊</div>
+  <div id="histList"></div>
+  <div class="tools">
+    <div class="tt"><span class="ticon b1">📢</span>叫号<span class="sub">下一位：王莹 ›</span></div>
+    <div class="tt"><span class="ticon b2">📊</span>工作汇总<span class="sub">汇总工作报表 ›</span></div>
+    <div class="tt"><span class="ticon b3">📅</span>预约看板<span class="sub">患者预约一览 ›</span></div>
+  </div>
 </div>
 
 <!-- 中栏：病历+处方 -->
 <div class="col mid">
   <div class="ptbar" id="ptbar">未选择患者（左侧点击「今天」列表）</div>
   <div id="recForm" style="display:none">
-  <!-- 语音问诊横条：录音按钮 + 计时 + 波形 + 实时转写 + 转写全文 + 整理成病历 -->
+  <!-- 语音问诊横条 -->
   <div class="voicebar" id="voiceBar">
     <div class="vb-left" id="recMount"></div>
     <div class="vb-right">
-      <label class="fl">转写全文（可编辑后再整理）<textarea id="f_transcript" rows="3" placeholder="点击左侧麦克风开始问诊录音，转写自动填入此处"></textarea></label>
+      <label class="fl" style="display:block;font-size:12px;color:#99a1ad">转写全文（可编辑后再整理）
+        <textarea id="f_transcript" rows="3" placeholder="点击左侧麦克风开始问诊录音，转写自动填入此处" style="width:100%;border:1px solid #dbe7f5;border-radius:4px;padding:5px 8px;font:inherit;margin-top:3px;box-sizing:border-box"></textarea></label>
       <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn blue sm" onclick="organizeTranscript()">🩺 整理成病历</button>
+        <button class="btn primary sm" onclick="organizeTranscript()">🩺 整理成病历</button>
         <span id="orgNote" class="hint"></span>
       </div>
     </div>
   </div>
-  <!-- 患者信息条 + 保存/取消/打印按钮组 -->
-  <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px;flex-wrap:wrap">
-    <button class="btn blue" onclick="saveOpd()">保存</button>
-    <button class="btn gray" onclick="cancelOpd()">取消</button>
-    <button class="btn" style="background:#8a8f8c" onclick="printOpd()">打印</button>
-  </div>
 
-  <!-- 中医四诊勾选面板（一页全勾） -->
+  <!-- 病历表单：标签左 + 黄色编辑区右 -->
+  <div class="frow2"><div class="flabel">主诉</div><div class="fval"><textarea id="f_cc" rows="2"></textarea></div></div>
+  <div class="frow2"><div class="flabel">现病史/既往史</div><div class="fval"><textarea id="f_pi" rows="3"></textarea></div></div>
+  <div class="frow2"><div class="flabel">过敏/个人史</div><div class="fval"><input id="f_al"></div></div>
+  <div class="frow2"><div class="flabel">体格检查</div><div class="fval"><div class="pe3">
+    <span>体温</span><input id="pe_t" inputmode="decimal" placeholder="35.6">℃
+    <span>血压</span><input id="pe_bp" placeholder="105/90">mmhg
+    <span>心率</span><input id="pe_hr" inputmode="numeric" placeholder="120">bpm
+  </div></div></div>
+  <div class="frow2"><div class="flabel">诊断</div><div class="fval"><textarea id="f_dx" rows="2" oninput="diagSearch(this.value)" placeholder="输入可联想诊断字典"></textarea></div></div>
+  <div class="frow2"><div class="flabel">辅助检查<small style="color:#bbb">（自动计费）</small></div><div class="fval">
+    <div id="auxRows"></div>
+    <div class="dd"><input id="f_aux" class="dd-input" placeholder="输入检查项" oninput="auxSearch(this.value)" autocomplete="off"></div>
+  </div></div>
+  <div class="frow2"><div class="flabel">治疗项目</div><div class="fval">
+    <div id="trtRows"></div>
+    <div class="dd"><input id="f_trt" class="dd-input" placeholder="输入治疗项" oninput="trtSearch(this.value)" autocomplete="off"></div>
+  </div></div>
+
+  <!-- 中医四诊勾选面板 -->
   <details class="tcm" id="tcmPanel">
     <summary>🀄 中医四诊勾选（问诊 · 舌象 · 面色 · 脉象）<span id="tcmCount" class="hint"></span></summary>
     <div class="body">
@@ -181,70 +342,52 @@ table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing
         echo '</div>';
       } ?>
       <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <button class="btn sm" onclick="tcmInsert()">📋 一键插入病历</button>
+        <button class="btn primary sm" onclick="tcmInsert()">📋 一键插入病历</button>
         <button class="btn gray sm" onclick="tcmClear()">清空勾选</button>
         <span class="hint">勾选结果将汇编为结构化四诊文本写入「现病史」，并随病历保存以便回显</span>
       </div>
     </div>
   </details>
 
-  <div class="editzone">
-  <div class="frow">
-  <label class="fl">主诉<textarea id="f_cc" rows="2"></textarea></label>
-  <label class="fl">现病史/既往史<textarea id="f_pi" rows="2"></textarea></label>
-  </div>
-  <div class="frow">
-  <label class="fl">过敏史/个人史<input id="f_al"></label>
-  <label class="fl">体格检查<div class="pe3">
-    <span>体温</span><input id="pe_t" inputmode="decimal" placeholder="35.6">C
-    <span>血压</span><input id="pe_bp" placeholder="105/90">mmhg
-    <span>心率</span><input id="pe_hr" inputmode="numeric" placeholder="120">bpm
-  </div></label>
-  </div>
-  <label class="fl">诊断（输入可联想诊断字典）<textarea id="f_dx" rows="2" oninput="diagSearch(this.value)"></textarea></label>
-  <label class="fl">辅助检查（自动计费）<div id="auxRows"></div>
-    <div class="dd"><input id="f_aux" placeholder="输入项目名搜索，如：血常规" oninput="auxSearch(this.value)" autocomplete="off"></div>
-  </label>
-  <label class="fl">治疗项目<div id="trtRows"></div>
-    <div class="dd"><input id="f_trt" placeholder="输入治疗项目搜索，如：针灸" oninput="trtSearch(this.value)" autocomplete="off"></div>
-  </label>
-  </div>
-
-  <div class="tabs" id="rxTabs">
-    <button data-t="western" class="on">+ 西药处方</button>
-    <button data-t="infusion">+ 输液处方</button>
-    <button data-t="chinese">+ 中药处方</button>
-    <button onclick="applyTemplate()">选择模板</button>
-    <button onclick="saveTemplate()">保存模板</button>
+  <div class="rx-actions" id="rxTabs">
+    <button class="addsheet" data-t="western">＋ 西药处方</button>
+    <button class="addsheet" data-t="infusion">＋ 输液处方</button>
+    <button class="addsheet" data-t="chinese">＋ 中药处方</button>
+    <div class="right">
+      <button class="tplbtn" onclick="applyTemplate()">选择模板</button>
+      <button class="tplbtn" onclick="saveTemplate()">保存模板</button>
+    </div>
   </div>
   <div id="rxArea"></div>
-  <div class="rxtotal">合计金额：<span id="grandTotal">¥0.00</span></div>
-  <label class="fl">注意事项<textarea id="f_notes" rows="2"></textarea></label>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <button class="btn" onclick="saveOpd()">💾 保存</button>
-    <button class="btn red" onclick="finishVisit()">✅ 完成接诊</button>
-    <span class="hint">AI 调用与打印需先保存</span>
+  <div class="rxtotal-row">合计金额：<b id="grandTotal" style="margin-left:4px">¥0.00</b></div>
+  <div class="frow2" style="border-bottom:0"><div class="flabel">注意事项</div><div class="fval"><textarea id="f_notes" rows="2"></textarea></div></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+    <button class="btn primary" onclick="saveOpd()">💾 保存</button>
+    <button class="btn green" onclick="finishVisit()">✅ 完成接诊</button>
+    <span class="hint" style="align-self:center">AI 调用与打印需先保存</span>
   </div>
   </div>
 </div>
 
-<!-- 右栏：AI诊断 / 患者历史 -->
+<!-- 右栏：智能诊断 / 患者历史 -->
 <div class="col right">
-  <div class="tabs">
+  <div class="tabs rtop">
     <button class="on" data-rtab="dx" onclick="rTab(this)">智能诊断</button>
     <button data-rtab="hist" onclick="rTab(this)">患者历史</button>
   </div>
   <div id="rtab-dx">
-    <button class="btn blue sm" onclick="aiDx()">🤖 AI 智能诊断</button>
-    <button class="btn gray sm" onclick="aiRxReview()">🛡 处方安全审查</button>
-    <span class="hint">基于主诉/现病史/查体生成鉴别诊断 · 仅供参考</span>
+    <div style="display:flex;gap:6px;margin:8px 0">
+      <button class="btn primary sm" onclick="aiDx()">🤖 AI 智能诊断</button>
+      <button class="btn outline sm" onclick="aiRxReview()">🛡 处方安全审查</button>
+    </div>
+    <div class="hint" style="margin-bottom:6px">基于主诉/现病史/查体生成鉴别诊断 · 仅供参考</div>
     <div id="aiResult"></div>
   </div>
   <div id="rtab-hist" style="display:none"><div id="ptHist">（先选择患者）</div></div>
 </div>
 </div>
 
-<!-- 整理成病历预览确认弹窗（医生可编辑后确认写入） -->
+<!-- 整理成病历预览确认弹窗 -->
 <div class="modal" id="mOrg">
   <div class="box" style="width:520px">
     <h3>🩺 整理成病历（预览确认）</h3>
@@ -252,7 +395,7 @@ table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing
     <label class="fl">主诉<textarea id="org_cc" rows="2"></textarea></label>
     <label class="fl">现病史<textarea id="org_pi" rows="4"></textarea></label>
     <label class="fl">四诊摘要（写入体格检查）<textarea id="org_tcm" rows="3"></textarea></label>
-    <div style="display:flex;gap:8px"><button class="btn" onclick="orgApply()">确认写入病历</button>
+    <div style="display:flex;gap:8px"><button class="btn primary" onclick="orgApply()">确认写入病历</button>
     <button class="btn gray" onclick="document.getElementById('mOrg').classList.remove('show')">取消</button></div>
   </div>
 </div>
@@ -262,14 +405,14 @@ table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing
   <div class="box">
     <h3>快速接诊（新建患者）</h3>
     <label class="fl">姓名*<input id="np_name"></label>
-    <div class="frow">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <label class="fl">性别<select id="np_g"><option>男</option><option>女</option><option>未知</option></select></label>
     <label class="fl">年龄<input id="np_age" inputmode="numeric"></label>
     </div>
     <label class="fl">电话<input id="np_phone"></label>
     <label class="fl">过敏史<input id="np_al"></label>
     <label class="fl">挂号费 ¥<input id="np_fee" value="10" inputmode="decimal"></label>
-    <div style="display:flex;gap:8px"><button class="btn" onclick="createPatient()">挂号并接诊</button>
+    <div style="display:flex;gap:8px"><button class="btn primary" onclick="createPatient()">挂号并接诊</button>
     <button class="btn gray" onclick="document.getElementById('mNew').classList.remove('show')">取消</button></div>
   </div>
 </div>
@@ -279,18 +422,19 @@ table.rx input, table.rx select { width:100%; border:0; font:inherit; box-sizing
   <div class="box">
     <h3>编辑患者档案</h3>
     <label class="fl">姓名<input id="ep_name"></label>
-    <div class="frow">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <label class="fl">性别<select id="ep_g"><option>男</option><option>女</option><option>未知</option></select></label>
     <label class="fl">年龄<input id="ep_age" inputmode="numeric"></label>
     </div>
     <label class="fl">电话<input id="ep_phone"></label>
     <label class="fl">过敏史<input id="ep_al"></label>
-    <div style="display:flex;gap:8px"><button class="btn" onclick="savePatient()">保存档案</button>
+    <div style="display:flex;gap:8px"><button class="btn primary" onclick="savePatient()">保存档案</button>
     <button class="btn gray" onclick="document.getElementById('mEdit').classList.remove('show')">取消</button></div>
   </div>
 </div>
 
 <script>
+function logout(){ location.href='logout.php'; }
 const A = 'api.php?act=';
 let CUR = { visit: null, patient: null, record: null, rx: {} };
 let Q = { today: [], history: [] };
@@ -356,12 +500,14 @@ async function loadQueue() {
 }
 function renderQueue() {
   const kw = $('qsearch').value.trim();
+  $('qCount').textContent = Q.today.filter(v => !kw || v.name.includes(kw)).length + ' 例';
   $('todayList').innerHTML = Q.today.filter(v => !kw || v.name.includes(kw)).map(v =>
     `<div class="qitem ${CUR.visit === v.id ? 'sel' : ''}" onclick="openVisit(${v.id})">
-      <span class="qname"><span class="avatar">${esc(v.name[0])}</span><span><b>${esc(v.name)}</b><br>
-      <span class="qmeta">${esc(v.gender)}/${esc(v.age)} ${v.registered_at.slice(11,16) || ''}</span></span></span>
-      <span class="tag ${v.status}">${({waiting:'待诊',in_visit:'就诊中',done:'已诊'})[v.status]}</span></div>`).join('')
-    || '<p class="hint">今日暂无患者，点击「快速接诊」。</p>';
+      <span class="avic ${v.gender === '女' ? 'f' : 'm'}">${v.gender === '女' ? '♀' : '♂'}</span>
+      <span class="qmain"><b>${esc(v.name)}</b><span class="qdoc">${esc(v.gender)}/${esc(v.age)}岁</span></span>
+      <span class="qright"><span class="qtime">${v.registered_at.slice(11,16) || ''}</span>
+      <span class="st ${v.status}">${({waiting:'待诊',in_visit:'就诊中',done:'已诊'})[v.status]}</span></span></div>`).join('')
+    || '<p class="hint" style="padding:10px 14px">今日暂无患者，点击「快速接诊」。</p>';
   $('histList').innerHTML = Q.history.map(v =>
     `<div class="histitem"><b>${esc(v.name)}</b> · ${esc(v.diagnosis || '未记录诊断')}<br><span class="hint">${esc(v.finished_at)} · 医生#${v.uid}</span></div>`).join('')
     || '<p class="hint">无历史就诊。</p>';
@@ -373,22 +519,25 @@ async function openVisit(vid) {
   if (!j.ok) { alert(j.error || '加载失败'); return; }
   CUR.visit = vid; CUR.patient = j.patient; CUR.record = j.record; CUR.rx = j.prescriptions || {};
   const p = j.patient;
-  $('ptbar').innerHTML = `<b>${esc(p.name)}</b> ${esc(p.gender)}/${esc(p.age)}岁 档案号:${esc(p.archive_no)} 挂号费¥${(+p.reg_fee).toFixed(2)}
-    <span>✏️</span><button class="btn ghost sm" title="编辑患者档案" onclick="openEditPt()">编辑</button>
-    ${p.case_id ? `<a class="btn ghost sm" href="case.php?id=${p.case_id}">进入医案 →</a>` : '<span class="hint">未关联医案</span>'}
+  $('ptbar').innerHTML = `<span class="gavic">${p.gender === '女' ? '♀' : '♂'}</span><b>${esc(p.name)}</b>
+    <span class="meta">${esc(p.gender)} · ${esc(p.age)}岁 · ${esc(p.phone || p.archive_no || '')}</span>
+    <span class="doc-chip">陈志强 - 全科</span><span class="fee">挂号费 <b>¥${(+p.reg_fee).toFixed(2)}</b></span>
+    <span class="paytype">自费</span>
+    <button class="btn outline sm" title="编辑患者档案" onclick="openEditPt()">✏️</button>
+    ${p.case_id ? `<a class="btn outline sm" style="color:#00b578;border-color:#00b578" href="case.php?id=${p.case_id}">进入医案 →</a>` : ''}
     <span class="actions">
-      <button class="btn blue sm" onclick="saveOpd()">保存</button>
-      <button class="btn gray sm" onclick="cancelOpd()">取消</button>
-      <button class="btn sm" style="background:#8a8f8c" onclick="printOpd()">打印</button>
+      <button class="btn primary sm" onclick="saveOpd()">保存</button>
+      <button class="btn outline sm" onclick="cancelOpd()">取消</button>
+      <button class="btn outline sm" onclick="printOpd()">🖨 打印</button>
     </span>`;
   $('recForm').style.display = 'block';
-  const r = j.record || {};
-  $('f_cc').value = r.chief_complaint || ''; $('f_pi').value = r.present_illness || '';
-  $('f_al').value = r.allergy_history || p.allergy || '';
-  peFill(r.physical_exam || '');
-  $('f_dx').value = r.diagnosis || ''; $('f_notes').value = r.notes || '';
-  window._aux = JSON.parse(r.auxiliary_exam || '[]'); window._trt = JSON.parse(r.treatments || '[]');
-  tcmRestore(r.tcm_checklist || null);
+  const rec = j.record || {};
+  $('f_cc').value = rec.chief_complaint || ''; $('f_pi').value = rec.present_illness || '';
+  $('f_al').value = rec.allergy_history || p.allergy || '';
+  peFill(rec.physical_exam || '');
+  $('f_dx').value = rec.diagnosis || ''; $('f_notes').value = rec.notes || '';
+  window._aux = JSON.parse(rec.auxiliary_exam || '[]'); window._trt = JSON.parse(rec.treatments || '[]');
+  tcmRestore(rec.tcm_checklist || null);
   renderAux(); renderTrt(); renderRx(); renderHist(j.history);
   $('aiResult').innerHTML = '<p class="hint">未运行。点击上方按钮生成鉴别诊断。</p>';
   renderQueue();
@@ -441,13 +590,15 @@ async function cancelOpd() {
 /* ---------- 辅助检查/治疗 ---------- */
 function renderAux() {
   $('auxRows').innerHTML = (window._aux || []).map((a, i) =>
-    `<div>${esc(a.name)} × <input style="width:50px" type="number" value="${a.times || 1}" onchange="window._aux[${i}].times=+this.value;calcTotals()"> ¥${(+a.price * (a.times || 1)).toFixed(2)}
-     <button class="btn gray sm" onclick="window._aux.splice(${i},1);renderAux()">删</button></div>`).join('');
+    `<div class="auxline">${esc(a.name)} <input class="times" type="number" value="${a.times || 1}" onchange="window._aux[${i}].times=+this.value;calcTotals()"> 次
+     <span class="price">¥${(+a.price * (a.times || 1)).toFixed(2)}</span>
+     <button class="del" onclick="window._aux.splice(${i},1);renderAux()">✕</button></div>`).join('');
 }
 function renderTrt() {
   $('trtRows').innerHTML = (window._trt || []).map((a, i) =>
-    `<div>${esc(a.name)} × <input style="width:50px" type="number" value="${a.times || 1}" onchange="window._trt[${i}].times=+this.value;calcTotals()"> ¥${((+a.price || 0) * (+a.times || 1)).toFixed(2)}
-     <button class="btn gray sm" onclick="window._trt.splice(${i},1);renderTrt()">删</button></div>`).join('');
+    `<div class="auxline">${esc(a.name)} <input class="times" type="number" value="${a.times || 1}" onchange="window._trt[${i}].times=+this.value;calcTotals()"> 次
+     <span class="price">¥${((+a.price || 0) * (+a.times || 1)).toFixed(2)}</span>
+     <button class="del" onclick="window._trt.splice(${i},1);renderTrt()">✕</button></div>`).join('');
 }
 async function auxSearch(kw) {
   if (!kw) return; const r = await fetch(A + 'search_proc&kw=' + encodeURIComponent(kw)); const j = await r.json();
@@ -498,15 +649,15 @@ function stepDose(t, i, key, d) {
 function rxSheet(t) {
   const items = window['_rx_' + t] || (window['_rx_' + t] = []);
   const sub = items.reduce((s, it) => s + (+it.price || 0) * (+it.qty || 0), 0);
-  const rows = items.map((it, i) => rxRow(t, it, i)).join('');
   return `<div class="rxsheet" id="sheet_${t}">
-    <div class="hd"><b style="font-size:13px">${RX_TITLE[t]}</b>
-      <button class="btn sm" onclick="addRxRow('${t}')">＋ 添加药行</button>
+    <div class="hd"><span class="rxtag">${RX_TITLE[t].replace('处方','')}</span><span class="free">已免费</span>
+      <button class="btn outline sm addrow" onclick="addRxRow('${t}')">＋ 添加药行</button>
       <span class="rxsub">小计 ¥${sub.toFixed(2)}</span></div>
-    <div class="dd"><input id="dd_${t}" placeholder="输入药名搜索添加，如：阿莫" oninput="drugSearch('${t}')" autocomplete="off" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d9d9d9;border-radius:6px;margin:4px 0;font:inherit"></div>
-    ${rxTable(t, items, rows)}</div>`;
+    ${rxTable(t, items)}
+    <div class="rxtotal-row">合计 <b>¥${sub.toFixed(2)}</b></div>
+    <div class="dd"><input id="dd_${t}" class="dd-input" placeholder="＋ 输入药名" oninput="drugSearch('${t}')" autocomplete="off" style="width:100%;padding:7px 8px;border:0;background:transparent;font:inherit;outline:none;color:#bbb"></div></div>`;
 }
-function rxTable(t, items, rows) {
+function rxTable(t, items) {
   if (t === 'chinese') {
     return `<table class="rx"><tr><th>序号</th><th>药名</th><th>剂量(g)</th><th>炮制</th><th>特殊煎法</th><th>单价</th><th>金额</th><th></th></tr>${
       items.map((it, i) => `<tr><td>${i + 1}</td>
@@ -630,14 +781,14 @@ async function aiDx() {
   const r = await fetch(A + 'ai_dx', { method: 'POST', body: fd }); const j = await r.json();
   if (!j.ok) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.error || '失败') + '</p>'; return; }
   if (!(j.differentials || []).length) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.note || 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）') + '</p>'; return; }
-  $('aiResult').innerHTML = '<p class="hint">⚠️ 以下内容仅供参考，点击症状标签可写入病历</p>' + j.differentials.map(d =>
-    `<div class="aibox"><div class="dxname">${esc(d.diagnosis)}
-      <span class="pill" style="background:${d.confidence === '较可能' ? '#1f6f43' : (d.confidence === '可能' ? '#d48806' : '#c0392b')};color:#fff">${esc(d.confidence || '可能')}</span></div>
+  $('aiResult').innerHTML = '<p class="hint" style="padding:4px">⚠️ 以下内容仅供参考，点击症状标签可写入病历</p>' + j.differentials.map((d, di) =>
+    `<div class="aibox"><div class="dxname">${di + 1}. ${esc(d.diagnosis)}
+      <span class="conf" style="background:${d.confidence === '较可能' ? '#00b578' : (d.confidence === '可能' ? '#d48806' : '#c0392b')}">${esc(d.confidence || '可能')}</span></div>
      <div class="airow"><b>伴随：</b>${(d.associated_symptoms || []).map(s => `<span class="chip sym" onclick="appendSymptom('${esc(s)}')">＋ ${esc(s)}</span>`).join('') || '—'}</div>
      <div class="airow"><b>查体：</b>${esc(d.physical_findings || d.supporting || '—')}</div>
-     <div class="airow"><b>检验：</b>${(d.suggested_tests || []).map(t => `<span class="pill">${esc(t)}</span>`).join('') || '—'}</div>
+     <div class="airow"><b>检验：</b>${(d.suggested_tests || []).map(t => `<span class="pill blue">${esc(t)}</span>`).join('') || '—'}</div>
      ${d.against ? `<div class="airow"><b>不符点：</b>${esc(d.against)}</div>` : ''}
-     ${d.red_flags ? `<div class="airow" style="color:#c0392b"><b>🚩 转诊指征：</b>${esc(d.red_flags)}</div>` : ''}</div>`).join('')
+     ${d.red_flags ? `<div class="airow"><b>🚩 转诊指征：</b><span class="pill redf">${esc(d.red_flags)}</span></div>` : ''}</div>`).join('')
     + ((j.missing_info || []).length ? `<div class="aibox"><b style="font-size:12px">建议补充采集：</b>${j.missing_info.map(m => `<div style="font-size:12px">· ${esc(m)}</div>`).join('')}</div>` : '')
     + '<p class="ai-note">⚠️ ' + esc(j.disclaimer || 'AI 建议仅供参考，最终诊断以执业医师判断为准。') + '</p>';
 }
