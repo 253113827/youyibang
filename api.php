@@ -575,12 +575,32 @@ case 'ai_treatment': {
     check_visit($vid);
     $dx = trim($_POST['diagnosis'] ?? '');
     if ($dx === '') fail('缺少诊断');
+    $type = ($_POST['type'] ?? 'western') === 'tcm' ? 'tcm' : 'western';
     $st = $pdo->prepare('SELECT p.age, p.gender, r.allergy_history FROM visits v JOIN patients p ON p.id = v.patient_id LEFT JOIN opd_records r ON r.visit_id = v.id WHERE v.id = ?');
     $st->execute([$vid]);
     $c = $st->fetch();
-    $prompt = <<<P
+    if ($type === 'tcm') {
+        $prompt = <<<P
 # 角色
-你是一名基层诊所全科医生，为下述诊断制定【成人常规治疗方案模板】，供接诊医生采纳后核对修改。输出仅供参考。
+你是一名中医师，为下述诊断拟定【中药饮片处方模板】（辨证参考主诉症状），供接诊医师采纳后核对加减。输出仅供参考。
+
+# 患者
+【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
+
+# 诊断（西医病名，请按中医辨证思路拟定对应治法与方药）
+{$dx}
+
+# 输出要求（严格 JSON，只输出 JSON 本体不要代码块）
+{"chinese_rx":[{"name":"饮片名","qty_g":10,"prep":"炮制（可空，如清炒/蜜炙）","decoct":"特殊煎法（可空，如先煎/后下/包煎）","note":"配伍用意（可空）"}],"formula":"推荐方剂名（如：龙胆泻肝汤加减）","aux_tests":[{"name":"检查项目名","times":1}],"notes":"医嘱：忌口/煎服法等"}
+
+# 规则
+1. 6-12 味饮片，剂量以克为单位符合药典常规；十八反十九畏禁忌；与过敏史冲突时换药并在 note 说明。
+2. aux_tests 为建议的辅助检查（0-3 项）。
+P;
+    } else {
+        $prompt = <<<P
+# 角色
+你是一名基层诊所全科医生，为下述诊断制定【成人常规西医治疗方案模板】，供接诊医生采纳后核对修改。输出仅供参考。
 
 # 患者
 【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
@@ -595,11 +615,16 @@ case 'ai_treatment': {
 1. 2-4 种常用药物，剂量符合成人常规；与过敏史冲突时换药并在 note 说明。
 2. aux_tests 为该诊断建议的辅助检查（0-3 项）。
 P;
+    }
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
     if ($r === null) fail('AI 服务暂不可用，请稍后重试');
     $s = strpos($r, '{'); $e = strrpos($r, '}');
     $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
     if (!is_array($j)) fail('AI 返回格式异常，请重试');
+    if ($type === 'tcm') {
+        ok(['chinese_rx' => (array)($j['chinese_rx'] ?? []), 'formula' => (string)($j['formula'] ?? ''),
+            'aux_tests' => (array)($j['aux_tests'] ?? []), 'notes' => (string)($j['notes'] ?? ''), 'type' => 'tcm']);
+    }
     ok(['western_rx' => (array)($j['western_rx'] ?? []), 'aux_tests' => (array)($j['aux_tests'] ?? []),
         'notes' => (string)($j['notes'] ?? '')]);
 }
