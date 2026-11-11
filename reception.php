@@ -856,6 +856,18 @@ function appendSymptom(s) {
   $('f_pi').focus();
 }
 window._aiData = {}; window._aiHtml = {}; window._aiAdopted = {};
+/* 收集当前表单里实时采集的病情（供 AI 诊断/方案生成使用，未保存也生效） */
+function liveCtxForm(fd) {
+  const v = id => ($(id) ? $(id).value.trim() : '');
+  if (v('f_cc')) fd.append('cc', v('f_cc'));
+  if (v('f_pi')) fd.append('pi', v('f_pi'));
+  if (v('f_al')) fd.append('al', v('f_al'));
+  const peParts = [];
+  if (v('pe_t')) peParts.push('体温 ' + v('pe_t') + '℃');
+  if (v('pe_bp')) peParts.push('血压 ' + v('pe_bp') + 'mmHg');
+  if (v('pe_hr')) peParts.push('心率 ' + v('pe_hr') + 'bpm');
+  if (peParts.length) fd.append('pe', peParts.join('，'));
+}
 async function aiDx(mode = 'western') {
   if (!CUR.visit) return alert('未选择患者');
   /* 已有该模式结果：直接显示（换患者/重新生成时覆盖） */
@@ -866,6 +878,8 @@ async function aiDx(mode = 'western') {
   window._aiMode = mode; window._aiVisit = CUR.visit;
   $('aiResult').innerHTML = '<p class="hint">AI 分析中（' + (mode === 'tcm' ? '中医辨证论治' : '西医鉴别诊断') + '标准，依据教材/药典/指南）…</p>';
   const fd = new FormData(); fd.append('visit_id', CUR.visit); fd.append('mode', mode);
+  /* 附带实时采集病情（最新主诉/现病史/查体/过敏史），未保存到数据库也能参与 AI 分析 */
+  liveCtxForm(fd);
   const r = await fetch(A + 'ai_dx', { method: 'POST', body: fd }); const j = await r.json();
   if (!j.ok) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.error || '失败') + '</p>'; return; }
   if (!(j.differentials || []).length) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.note || 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）') + '</p>'; return; }
@@ -910,6 +924,7 @@ async function adoptDx(di, type = 'western') {
   let tp = null, err = '';
   try {
     const fd = new FormData(); fd.append('visit_id', CUR.visit); fd.append('diagnosis', dxName); fd.append('type', type);
+    liveCtxForm(fd); /* 附带实时采集病情（最新主诉/现病史/查体/过敏史） */
     const r = await fetch(A + 'ai_treatment', { method: 'POST', body: fd });
     const j = await r.json();
     if (j.ok) tp = j; else err = j.error || '生成失败';

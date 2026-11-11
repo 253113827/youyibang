@@ -536,7 +536,12 @@ case 'ai_dx': {
         FROM visits v JOIN patients p ON p.id = v.patient_id LEFT JOIN opd_records r ON r.visit_id = v.id WHERE v.id = ?');
     $st->execute([$vid]);
     $c = $st->fetch();
-    $baseInfo = "【主诉】{$c['chief_complaint']}\n【现病史】{$c['present_illness']}\n【体格检查】{$c['physical_exam']}\n【既往史/过敏史】{$c['allergy_history']}\n【年龄】{$c['age']} 【性别】{$c['gender']}";
+    /* 优先采用前端传来的【实时采集病情】，未填的用数据库兜底 */
+    $cc = trim($_POST['cc'] ?? '') ?: (string)($c['chief_complaint'] ?? '');
+    $pi = trim($_POST['pi'] ?? '') ?: (string)($c['present_illness'] ?? '');
+    $pe = trim($_POST['pe'] ?? '') ?: (string)($c['physical_exam'] ?? '');
+    $al = trim($_POST['al'] ?? '') ?: (string)($c['allergy_history'] ?? '');
+    $baseInfo = "【主诉】{$cc}\n【现病史】{$pi}\n【体格检查】{$pe}\n【既往史/过敏史】{$al}\n【年龄】{$c['age']} 【性别】{$c['gender']}";
     if ($mode === 'tcm') {
         $task = <<<T
 # 任务（中医辨证论治模式）
@@ -591,13 +596,24 @@ case 'ai_treatment': {
     $st = $pdo->prepare('SELECT p.age, p.gender, r.allergy_history FROM visits v JOIN patients p ON p.id = v.patient_id LEFT JOIN opd_records r ON r.visit_id = v.id WHERE v.id = ?');
     $st->execute([$vid]);
     $c = $st->fetch();
+    /* 优先采用前端传来的【实时采集病情】（最新主诉/现病史/查体/过敏史），数据库仅兜底 */
+    $cc = trim($_POST['cc'] ?? '');
+    $pi = trim($_POST['pi'] ?? '');
+    $pe = trim($_POST['pe'] ?? '');
+    $al = trim($_POST['al'] ?? '');
+    if ($al === '') $al = (string)($c['allergy_history'] ?? '');
+    if ($cc === '') $cc = '未填写';
+    if ($pi === '') $pi = '未填写';
+    if ($pe === '') $pe = '未填写';
+    $ctxBlock = "【主诉】{$cc}\n【现病史】{$pi}\n【体格检查】{$pe}\n【过敏史】{$al}";
     if ($type === 'tcm') {
         $prompt = <<<P
 # 角色
 你是一名中医师，为下述诊断拟定【中药饮片处方模板】（辨证参考主诉症状），供接诊医师采纳后核对加减。输出仅供参考。处方必须出自经典方剂或《中医内科学》《方剂学》教材、《中国药典》2020版，严禁编造药味与剂量。
 
 # 患者
-【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
+【年龄】{$c['age']} 【性别】{$c['gender']}
+{$ctxBlock}
 
 # 诊断（西医病名，请按中医辨证思路拟定对应治法与方药）
 {$dx}
@@ -616,7 +632,8 @@ P;
 你是一名基层诊所全科医生，为下述诊断制定【成人常规西医治疗方案模板】，供接诊医生采纳后核对修改。输出仅供参考。药物必须依据《内科学》人卫版教材、相关临床诊疗指南、《中国药典》2020版，严禁编造。
 
 # 患者
-【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
+【年龄】{$c['age']} 【性别】{$c['gender']}
+{$ctxBlock}
 
 # 诊断
 {$dx}
