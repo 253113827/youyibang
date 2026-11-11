@@ -153,7 +153,7 @@
       }
       /* ---- 云端分片：WebAudio 采集 PCM，前端切片编码 WAV（绕开 WebKit MediaRecorder 不支持 timeslice 的缺陷） ---- */
       var asrCtx = null, asrProc = null, asrSrc = null, asrBuf = [], asrBufLen = 0, asrMuted = false;
-      var CHUNK_SEC = 4, TARGET_RATE = 16000;
+      var CHUNK_SEC = 2, TARGET_RATE = 16000;
       function encodeWAV(f32, rate) {
         /* 线性重采样到 16k + PCM16 WAV 封装 */
         var pcm = f32, ratio = 1;

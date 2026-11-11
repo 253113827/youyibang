@@ -15,7 +15,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <link rel="stylesheet" href="assets/style.css">
 <script src="assets/speech.js?v=2"></script>
 <script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
-<script src="assets/recorder.js?v=6"></script>
+<script src="assets/recorder.js?v=7"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
