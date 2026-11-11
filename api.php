@@ -699,6 +699,45 @@ case 'save_recording_transcript': {
     ok(['rec_id' => $rid]);
 }
 
+/* 整段录音精转：录音结束后用整段音频重新识别（精度高于 2s 分片），供对照修正 */
+case 'asr_full': {
+    $vid = (int)($_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    if (empty($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) fail('缺少音频');
+    $ASR_FULL_ENDPOINTS = [
+        ['base' => 'http://127.0.0.1:18792/v1', 'key' => 'local', 'model' => 'r2t2'],      // M5 MAX R2T2（隧道）
+        ['base' => 'http://127.0.0.1:18765/v1', 'key' => 'local', 'model' => 'whisper-1'], // 服务器本机 whisper 兜底
+    ];
+    $tmp = $_FILES['audio']['tmp_name'];
+    $err = '';
+    foreach ($ASR_FULL_ENDPOINTS as $ep) {
+        $ch = curl_init(rtrim($ep['base'], '/') . '/audio/transcriptions');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 600, /* 整段精转耗时长（约 1/16 实时） */
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+            CURLOPT_PROXY => '',
+            CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $ep['key']],
+            CURLOPT_POSTFIELDS => [
+                'model' => $ep['model'] ?? 'whisper-1',
+                'audio' => new CURLFile($tmp, 'audio/webm', 'full.webm'),
+            ],
+        ]);
+        $body = curl_exec($ch);
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $cerr = curl_error($ch);
+        curl_close($ch);
+        if ($body !== false && $http === 200) {
+            $j = json_decode($body, true);
+            if (isset($j['text']) && trim((string)$j['text']) !== '') ok(['text' => trim((string)$j['text'], " |　")]);
+        }
+        $err = $cerr ?: "HTTP {$http} {$body}";
+    }
+    fail('整段精转暂不可用：' . $err);
+}
+
 /* 处方安全审查：规则引擎（rules.php 配对表+过敏交叉）优先，AI 补充；warnings 带 source 字段 */
 case 'ai_rx_review': {
     $vid = (int)($_POST['visit_id'] ?? 0);

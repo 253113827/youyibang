@@ -435,6 +435,20 @@ table.rx .rowdel:hover { color:var(--danger); }
 </div>
 
 <!-- 整理成病历预览确认弹窗 -->
+<div class="modal" id="mRefine">
+  <div class="box" style="width:640px">
+    <h3>🎧 整段精听校对（更准确）</h3>
+    <p class="hint" id="rfNote">AI 正在重新精听整段录音， accuracy 高于实时转写…</p>
+    <label class="fl">实时转写（分片，仅供对照）
+      <textarea id="rf_realtime" rows="4" style="background:#f7f7f7;color:#888" readonly></textarea></label>
+    <label class="fl">精转稿（可编辑修正，确认后采用）
+      <textarea id="rf_refined" rows="7"></textarea></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+      <button class="btn gray sm" onclick="closeRefine()">放弃</button>
+      <button class="btn green sm" onclick="applyRefine()">✅ 采用精转稿</button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="mOrg">
   <div class="box" style="width:520px">
     <h3>🩺 整理成病历（<span id="orgModeLabel">西医</span>标准 · 预览确认）</h3>
@@ -1008,7 +1022,7 @@ function saveRecTranscript(rid) {
 }
 /* 录音结束自动归档上传（由 onStop 回调触发）：整段音频 + 全文转写 + 分段（offset 秒）一起存，逐句可回放 */
 async function uploadRecording(blob, fullText) {
-  if (!blob || !CUR.visit) return;
+  if (!blob || !CUR.visit) return null;
   const fd = new FormData();
   fd.append('visit_id', CUR.visit);
   fd.append('audio', blob, 'visit.webm');
@@ -1025,8 +1039,50 @@ async function uploadRecording(blob, fullText) {
         await fetch(A + 'save_recording_transcript', { method: 'POST', body: fd2 });
       }
       loadRecordings();
+      return j.rec_id;
     }
   } catch (e) {}
+  return null;
+}
+/* 整段精听校对：录音结束后自动用整段音频重新识别（精度高于 2s 分片），弹窗对照修正后采用 */
+async function refineFullRecording(recId, realtimeText) {
+  const dur = Math.round(window._recDuration || 0);
+  $('rf_realtime').value = realtimeText || '（无实时转写）';
+  $('rf_refined').value = '';
+  $('rfNote').textContent = 'AI 正在重新精听整段录音' + (dur ? '（' + fmtSec(dur) + '，约需 ' + Math.max(3, Math.round(dur / 12)) + ' 秒）' : '') + '，请稍候…';
+  $('mRefine').classList.add('show');
+  try {
+    /* 归档音频已在服务器，直接按 visit 取最新一条；前端把 blob 已存 window._lastRecBlob 亦可直接传 */
+    const fd = new FormData();
+    fd.append('visit_id', CUR.visit);
+    if (window._lastRecBlob) fd.append('audio', window._lastRecBlob, 'full.webm');
+    else { $('rfNote').textContent = '缺少录音数据，无法精转'; return; }
+    const r = await fetch(A + 'asr_full', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.ok && j.text) {
+      $('rf_refined').value = j.text;
+      $('rfNote').textContent = '精转完成。请对照修正，确认无误后点「采用精转稿」（同时更新本条录音的逐字稿）';
+      window._refineRecId = recId;
+    } else {
+      $('rfNote').textContent = '精转失败：' + (j.error || '未知错误') + '。实时转写仍可正常使用。';
+    }
+  } catch (e) {
+    $('rfNote').textContent = '精转请求失败（网络异常），实时转写仍可正常使用。';
+  }
+}
+function closeRefine() { $('mRefine').classList.remove('show'); }
+async function applyRefine() {
+  const txt = $('rf_refined').value.trim();
+  if (!txt) return alert('精转稿为空');
+  $('f_transcript').value = txt;
+  if (window._refineRecId) {
+    const fd = new FormData();
+    fd.append('rec_id', window._refineRecId);
+    fd.append('transcript', txt);
+    fetch(A + 'save_recording_transcript', { method: 'POST', body: fd });
+  }
+  $('mRefine').classList.remove('show');
+  $('orgNote').textContent = '已采用精转稿，可点击「整理成病历」';
 }
 /* 逐句回放：点击某分段 ▶，在对应归档录音中定位到 offset 秒播放 */
 function playSegment(audioId, offset) {
@@ -1091,11 +1147,15 @@ function recorderInit() {
       el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + fin;
     },
     onStop: function (fullText, blob) {
-      $('orgNote').textContent = '录音结束，可编辑转写后点击「整理成病历」';
-      /* 录音归档：整段音频上传 + 转写随存（可回放/修正） */
+      $('orgNote').textContent = '录音结束，正在归档并精听校对…';
+      /* 录音归档：整段音频上传 + 转写随存（可回放/修正）；随后自动整段精转弹窗校对 */
       if (blob && blob.size > 2000) {
         window._recDuration = (window.REC && REC.durationSec) ? REC.durationSec() : 0;
-        uploadRecording(blob, fullText);
+        window._lastRecBlob = blob;
+        uploadRecording(blob, fullText).then(recId => {
+          if (recId && window.YYB_ASR === true) refineFullRecording(recId, fullText);
+          else $('orgNote').textContent = '录音已归档，可编辑转写后点击「整理成病历」';
+        });
       }
     }
   });
