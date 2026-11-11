@@ -221,3 +221,17 @@
 1. **打印页乱码修复**：中药处方条目无 spec 字段导致 PHP Warning 直接打进页面 → 打印模板兼容中药（饮片名/炮制/克数/特殊煎法/剂数独立表头），西药格式不变
 2. **中医辨证含理疗方案**：ai_treatment 中药模式新增 physio 字段（针灸/艾灸/刮痧/拔罐/推拿，针灸须列具体穴位+手法+疗程，出处标《针灸学》《推拿学》等教材）；采纳后自动写入「治疗项目」栏
 3. **整理病历经诊断自动补全**：organize_transcript 接收当前诊断（f_dx），按该诊断的规范病历结构补全现病史要素（起病诱因/症状特点/伴随症/诊疗经过/一般情况）；**对话未提及的一律写「未提及」，严禁编造**
+
+### 稳定性与断电自恢复审计（2026-11-12 00:45）
+| 组件 | 自启方式 | 崩溃自愈 |
+|---|---|---|
+| 服务器 nginx/php-fpm/mysqld | systemd enabled（宝塔） | 系统级 |
+| 服务器 ASR（whisper base） | systemd `yyb-asr` | Restart=always |
+| M5 实时 ASR（R2T2 18780） | LaunchAgent `yyb-r2t2-realtime` | KeepAlive=true |
+| M5 精转 ASR（18790） | LaunchAgent `yyb-r2t2-full` | KeepAlive=true |
+| M5→服务器 三隧道（18783/18792/18770） | LaunchAgent `yyb-asr-tunnel`（守护脚本 5s 重连） | KeepAlive=true |
+| Mac | **已退出依赖链**（LLM 隧道迁至 M5 直连内网 jetson） | 无需 |
+
+- **架构升级**：LLM 隧道从 Mac 迁至 M5（M5 与 jetson LLM 网关同内网直连 10.0.0.128:19170），Mac 关机**不再影响任何功能**；服务器 config.php 的 18770 端点无需改动（隧道端点不变，只是中转方变了）
+- M5 LaunchAgent 日志：`~/yyb-*.log/.err`；手工重启某服务：`launchctl kickstart -k gui/501/com.youyibang.yyb-r2t2-realtime`
+- 唯一剩余依赖：**M5 MAX 开机在线**（实时转写+精转+LLM 全在它身上）。M5 关机时：ASR 自动回退服务器 whisper base（转写可用但精度降）、整理病历/AI 提示离线（数据不丢）
