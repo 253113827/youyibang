@@ -153,8 +153,9 @@
       }
       function startChunkASR() {
         if (asrActive) return;
-        if (!asrCfg || !asrCfg.enabled) return;
+        if (!asrCfg || !asrCfg.enabled) { say('调试: asrCfg 未启用'); return; }
         if (!window.MediaRecorder || !navigator.mediaDevices) { say('当前浏览器不支持录音分片，请改用 Chrome'); return; }
+        say('分片通道启动中…');
         navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
           if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
           asrStream = s;
@@ -184,7 +185,7 @@
           };
           mediaRec.start(4000); /* 每 4s 产生一个分片 */
           asrActive = true;
-          if (!srHadText) say('云端分片转写中…');
+          say('云端分片转写中…');
         }).catch(function () { /* 麦克风被 SR 占用等：静默，SR 仍可用 */ });
       }
       function stopChunkASR() {
