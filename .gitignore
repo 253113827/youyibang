@@ -2,3 +2,5 @@ config.php
 uploads/
 *.log
 .DS_Store
+
+/diag_dict.sql
