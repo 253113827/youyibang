@@ -550,15 +550,14 @@ case 'ai_dx': {
 基于以上信息，给出 3-5 个鉴别诊断，按可能性从高到低排列。
 
 # 输出要求（严格 JSON）
-{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）","treatment_plan":{"western_rx":[{"name":"通用药名","spec":"常见规格","usage":"口服/静滴等","freq":"qd/bid/tid","dose":"单次剂量数字","dose_unit":"片/粒/袋/支","days":3,"qty":1,"qty_unit":"盒","note":"用药交代（可空）"}],"aux_tests":[{"name":"检查项目名","times":1}],"notes":"注意事项（可空）"}}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
+{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）"}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
 
 # 规则
 1. 只依据输入信息推理，不得虚构；信息不足写进 missing_info。
 2. 必须包含至少一条"需警惕但不能除外"的严重可治疾病。
 3. 涉及急危重指征时在 red_flags 写出转诊建议。
 4. associated_symptoms 为该诊断常见伴随症状词组（每条 2-6 字），供医生点击快捷写入病历。
-5. treatment_plan 为该诊断的【基层常用标准治疗方案】模板（供医生采纳后核对修改）：西药给出通用名+常见规格+常规用法用量；aux_tests 为建议辅助检查；剂量须符合成人常规，注意与过敏史冲突时在 note 提示。价格不要输出。
-6. disclaimer 字段原样保留。
+5. 只输出 JSON 本体，不要 markdown 代码块包裹。disclaimer 字段原样保留。
 P;
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
     if ($r === null) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）']);
@@ -568,6 +567,41 @@ P;
     if (!$dx) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 返回格式异常，请稍后重试']);
     ok(['differentials' => $dx, 'missing_info' => (array)($j['missing_info'] ?? []),
         'disclaimer' => $j['disclaimer'] ?? '本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。']);
+}
+
+/* 采纳诊断时按需生成治疗方案（短输出，避免长响应截断） */
+case 'ai_treatment': {
+    $vid = (int)($_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    $dx = trim($_POST['diagnosis'] ?? '');
+    if ($dx === '') fail('缺少诊断');
+    $st = $pdo->prepare('SELECT p.age, p.gender, r.allergy_history FROM visits v JOIN patients p ON p.id = v.patient_id LEFT JOIN opd_records r ON r.visit_id = v.id WHERE v.id = ?');
+    $st->execute([$vid]);
+    $c = $st->fetch();
+    $prompt = <<<P
+# 角色
+你是一名基层诊所全科医生，为下述诊断制定【成人常规治疗方案模板】，供接诊医生采纳后核对修改。输出仅供参考。
+
+# 患者
+【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
+
+# 诊断
+{$dx}
+
+# 输出要求（严格 JSON，只输出 JSON 本体不要代码块）
+{"western_rx":[{"name":"通用药名","spec":"常见规格","usage":"口服","freq":"bid","dose":"1","dose_unit":"片","days":3,"qty":1,"qty_unit":"盒","note":"用药交代（可空）"}],"aux_tests":[{"name":"检查项目名","times":1}],"notes":"注意事项，与过敏史冲突时在此提示"}
+
+# 规则
+1. 2-4 种常用药物，剂量符合成人常规；与过敏史冲突时换药并在 note 说明。
+2. aux_tests 为该诊断建议的辅助检查（0-3 项）。
+P;
+    $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
+    if ($r === null) fail('AI 服务暂不可用，请稍后重试');
+    $s = strpos($r, '{'); $e = strrpos($r, '}');
+    $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
+    if (!is_array($j)) fail('AI 返回格式异常，请重试');
+    ok(['western_rx' => (array)($j['western_rx'] ?? []), 'aux_tests' => (array)($j['aux_tests'] ?? []),
+        'notes' => (string)($j['notes'] ?? '')]);
 }
 
 /* 处方安全审查：规则引擎（rules.php 配对表+过敏交叉）优先，AI 补充；warnings 带 source 字段 */

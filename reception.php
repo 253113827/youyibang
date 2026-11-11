@@ -796,22 +796,35 @@ async function aiDx() {
     + ((j.missing_info || []).length ? `<div class="aibox"><b style="font-size:12px">建议补充采集：</b>${j.missing_info.map(m => `<div style="font-size:12px">· ${esc(m)}</div>`).join('')}</div>` : '')
     + '<p class="ai-note">⚠️ ' + esc(j.disclaimer || 'AI 建议仅供参考，最终诊断以执业医师判断为准。') + '</p>';
 }
-/* 采纳 AI 诊断：诊断名→诊断栏；查体→体格检查；建议检验→辅助检查；推荐处方→西药处方签；注意事项→注意事项 */
-function adoptDx(di) {
+/* 采纳 AI 诊断：诊断名→诊断栏；查体→体格检查；建议检验→辅助检查；治疗方案（ai_treatment 实时生成）→西药处方签；注意事项→注意事项 */
+async function adoptDx(di) {
   if (!CUR.visit) return alert('未选择患者');
   const d = (window._aiData || [])[di];
   if (!d) return;
   if (window._aiAdopted && window._aiAdopted[di]) return alert('该诊断已采纳过');
   /* 诊断名：去掉 ICD-10 编码括号 */
   const dxName = (d.diagnosis || '').replace(/[（(][A-Z]\d{2}[^）)]*[）)]/g, '').trim() || (d.diagnosis || '').trim();
+  const btn = document.querySelector('#aidx_' + di + ' .btn.primary.sm');
+  if (btn) { btn.textContent = '⏳ 正在生成治疗方案…'; btn.disabled = true; }
+  let tp = null, err = '';
+  try {
+    const fd = new FormData(); fd.append('visit_id', CUR.visit); fd.append('diagnosis', dxName);
+    const r = await fetch(A + 'ai_treatment', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.ok) tp = j; else err = j.error || '生成失败';
+  } catch (e) { err = '网络异常'; }
+  if (!tp) {
+    if (btn) { btn.textContent = '✅ 采纳此诊断（写入病历+处方）'; btn.disabled = false; }
+    if (!confirm('治疗方案生成失败（' + err + '）。\n仅写入诊断和检查建议，继续吗？')) { window._aiAdopted[di] = undefined; return; }
+  }
   if (dxName) appendField('f_dx', dxName);
   const pf = d.physical_findings || d.supporting || '';
   if (pf) appendField('pe_t', pf, true);
   (d.suggested_tests || []).forEach(t => {
     (window._aux = window._aux || []).push({ name: String(t), price: 0, times: 1 });
   });
-  const tp = d.treatment_plan || {};
-  if ((tp.western_rx || []).length) {
+  let rxCount = 0;
+  if (tp && (tp.western_rx || []).length) {
     _openSheets.western = true;
     (window._rx_western = window._rx_western || []);
     tp.western_rx.forEach(x => {
@@ -823,15 +836,17 @@ function adoptDx(di) {
         qty_unit: (QTY_UNITS.western.includes(x.qty_unit) ? x.qty_unit : '盒'),
         price: 0, note: String(x.note || '')
       });
+      rxCount++;
     });
   }
-  if (tp.notes) appendField('f_notes', String(tp.notes));
+  if (tp && tp.aux_tests) {
+    tp.aux_tests.forEach(a => { (window._aux = window._aux || []).push({ name: String(a.name || ''), price: 0, times: +(a.times || 1) }); });
+  }
+  if (tp && tp.notes) appendField('f_notes', String(tp.notes));
   renderAux(); renderRx();
   window._aiAdopted = window._aiAdopted || {}; window._aiAdopted[di] = true;
-  const box = document.getElementById('aidx_' + di);
-  if (box) { const b = box.querySelector('.btn.primary.sm'); if (b) { b.textContent = '✅ 已采纳'; b.classList.remove('primary'); b.classList.add('green'); b.onclick = null; } }
-  const cnt = (tp.western_rx || []).length;
-  alert('已采纳「' + dxName + '」：' + ((tp.western_rx || []).length ? cnt + ' 条西药、' : '') + ((d.suggested_tests || []).length ? (d.suggested_tests).length + ' 项检查' : '无检查') + '\n药品价格为 0，请核对修改后保存病历');
+  if (btn) { btn.textContent = '✅ 已采纳'; btn.classList.remove('primary'); btn.classList.add('green'); btn.onclick = null; }
+  alert('已采纳「' + dxName + '」写入病历' + (rxCount ? '（' + rxCount + ' 条西药）' : '') + '\n药品价格为 0，请核对修改后保存病历');
 }
 async function aiRxReview() {
   if (!CUR.visit) return alert('未选择患者');
