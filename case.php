@@ -15,6 +15,7 @@ if (!$case) { http_response_code(404); exit('医案不存在'); }
 <title>医案 #<?= $id ?> <?= htmlspecialchars($case['patient_name']) ?> - 有医帮</title>
 <link rel="stylesheet" href="assets/style.css">
 <script src="assets/speech.js"></script>
+<script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
 <script src="assets/recorder.js"></script>
 </head>
 <body>
@@ -172,6 +173,7 @@ $('#askBtn').onclick=async()=>{
   const target = document.getElementById('msgInput');
   if (window.Recorder && window.Recorder.mount(mount, {
     compact: true,
+    asr: { enabled: window.YYB_ASR === true, url: 'api.php?act=asr_chunk' },
     onFinal: function (fin) {
       /* final 结果追加到输入框光标处 */
       const pos = typeof target.selectionEnd === 'number' ? target.selectionEnd : target.value.length;

@@ -102,3 +102,11 @@ function md_render(string $md): string {
     if ($inList) $html .= '</ul>';
     return $html;
 }
+
+// ASR 语音转写端点（OpenAI 兼容 /v1/audio/transcriptions，按顺序故障切换）
+// 用于「云端分片转写」：浏览器录音每 4s 分片上传，实时出字；
+// 解决 Chrome 内置语音识别（依赖 Google 服务）在国内网络静默失败的问题
+$ASR_ENDPOINTS = [
+    ['base' => 'http://127.0.0.1:8765/v1', 'key' => 'local', 'model' => 'whisper-1'], // 本机 faster-whisper（可选）
+    // ['base' => 'http://your-asr-server/v1', 'key' => 'your-key', 'model' => 'whisper-1'],
+];

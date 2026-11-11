@@ -762,6 +762,38 @@ pre { white-space: pre-wrap; font: inherit; }
 
 /* 一键整理医疗病历：口语转写 → 中医病历结构化（主诉/现病史/四诊摘要）
  * 上游离线时降级：返回 ok:false + raw 原始转写，前端兜底插入现病史，不丢数据。 */
+case 'asr_chunk': {
+    /* 云端分片转写：接收浏览器录音分片（webm/opus），转发到 OpenAI 兼容 /v1/audio/transcriptions */
+    if (empty($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) fail('缺少音频分片');
+    if (empty($ASR_ENDPOINTS)) ok(['text' => '', 'note' => '未配置 ASR 端点']);
+    $tmp = $_FILES['audio']['tmp_name'];
+    $err = '';
+    foreach ($ASR_ENDPOINTS as $ep) {
+        $ch = curl_init(rtrim($ep['base'], '/') . '/audio/transcriptions');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $ep['key']],
+            CURLOPT_POSTFIELDS => [
+                'model' => $ep['model'] ?? 'whisper-1',
+                'audio' => new CURLFile($tmp, 'audio/webm', 'chunk.webm'),
+            ],
+        ]);
+        $body = curl_exec($ch);
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $cerr = curl_error($ch);
+        curl_close($ch);
+        if ($body !== false && $http === 200) {
+            $j = json_decode($body, true);
+            if (isset($j['text'])) ok(['text' => trim($j['text'])]);
+        }
+        $err = $cerr ?: "HTTP {$http} {$body}";
+    }
+    echo json_encode(['ok' => false, 'error' => 'ASR 上游不可用：' . mb_substr($err, 0, 120)], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 case 'organize_transcript': {
     $transcript = trim($_POST['transcript'] ?? '');
     if ($transcript === '') fail('转写内容为空');

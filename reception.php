@@ -434,6 +434,7 @@ table.rx .rowdel:hover { color:var(--danger); }
 </div>
 
 <script>
+var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;
 function logout(){ location.href='logout.php'; }
 const A = 'api.php?act=';
 let CUR = { visit: null, patient: null, record: null, rx: {} };
@@ -861,6 +862,7 @@ function recorderInit() {
   const mount = $('recMount');
   if (!window.Recorder) return; /* recorder.js 未加载（理论不会） */
   REC = window.Recorder.mount(mount, {
+    asr: { enabled: window.YYB_ASR === true, url: A + 'asr_chunk' },
     onFinal: function (fin) {
       /* final 结果追加进「转写全文」可编辑框（interim 由组件自身实时区显示） */
       const el = $('f_transcript');

@@ -113,3 +113,10 @@
   2. `rxSheet()` 调用了从未定义的 `rxRow()` → 删除死调用（`rxTable()` 内部自建行）
 - 本地开发：`php -S 127.0.0.1:8090 -t 项目目录`，MySQL 8 + `db.sql`/`db_opd.sql`/`data/diag_dict.sql`
 - 旧版 UI 备份见本地 `reception_old_ui.php`（不入库）
+
+## 实时语音转写（双通道，2026-11-11）
+- **通道1 浏览器内置识别**：SpeechRecognition，interim 实时灰色上屏（Chrome 需可达 Google；不可达时自动降级）
+- **通道2 云端分片转写**：MediaRecorder 每 4s 分片 → `POST api.php?act=asr_chunk` → 转发到 `$ASR_ENDPOINTS`（OpenAI 兼容 `/v1/audio/transcriptions`，多端点故障切换），文字实时追加
+- 错误可视化：权限被拒/网络不可达/未检测到语音均有中文状态提示，不再静默 0 字
+- 本机自建 ASR：`python asr_server.py`（faster-whisper small，端口 8765，需 `.asr_venv`：`pip install faster-whisper fastapi uvicorn python-multipart av`）
+- 浏览器识别一旦出字，分片通道自动让位，避免重复；两通道计数共用「已识别 X 字」

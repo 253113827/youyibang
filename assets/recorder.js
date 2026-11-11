@@ -1,23 +1,30 @@
-/* 有医帮 - 录音问诊组件（v3 语音问诊升级）
- * 功能：三态大按钮（空闲🎤/录音中⏹红+脉冲/处理中…）、mm:ss 计时器、
- *       声波纹动画（优先 getUserMedia+AnalyserNode 真波形；失败自动降级伪波形）、
- *       边录边转（interim 实时上屏灰色斜体，final 追加进完整转写）、"已识别 X 字"。
- * 录音数据只留本地转写，不上传音频。
- * 兼容：iOS Safari 14.5+/macOS Safari/Chrome（需 HTTPS）。不支持环境返回 null（回退旧版 speech.js 隐藏按钮逻辑）。
- *
+/* 有医帮 - 录音问诊组件（v4 双通道实时转写）
+ * 通道1：浏览器内置 Web Speech API（Chrome/Safari，实时 interim 上屏）
+ * 通道2：云端分片转写 —— MediaRecorder 每 4s 分片 POST api.php?act=asr_chunk
+ *        转发到 OpenAI 兼容 /v1/audio/transcriptions（config.php $ASR_ENDPOINTS 故障切换）
+ * 修复：Chrome 内置识别依赖 Google 服务，国内网络静默失败（0 字）——
+ *       现在错误会显示在状态栏，且云端分片通道自动接管，文字实时上屏。
+ * 录音数据只用于转写，不上传留存。
  * 用法：
  *   var inst = Recorder.mount(el, {
- *     compact: false,                 // 紧凑版（case.php）
- *     onFinal: function(text){},      // 每段 final 结果（追加式）
- *     onInterim: function(text){},    // interim 实时结果（组件自身也会显示）
- *     onStop: function(full){}        // 停止时回调完整转写全文
+ *     compact: false,                       // 紧凑版（case.php）
+ *     asr: { enabled: bool, url: '...' },   // 云端分片转写开关
+ *     onFinal: function(text, full){},      // 每段 final 结果（追加式）
+ *     onInterim: function(text){},          // interim 实时结果
+ *     onStop: function(full){}              // 停止时回调完整转写全文
  *   });
- *   inst.start(); inst.stop(); inst.isRecording();
  */
 (function () {
   'use strict';
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   var AC = window.AudioContext || window.webkitAudioContext;
+  var ERRMSG = {
+    'not-allowed': '麦克风权限被拒绝：请在浏览器地址栏允许麦克风',
+    'service-not-allowed': '浏览器不允许语音识别服务',
+    'network': '浏览器识别服务不可达（Chrome 需连接 Google），已切换云端分片转写',
+    'no-speech': '未检测到语音，请靠近麦克风说话',
+    'audio-capture': '未捕获到麦克风设备'
+  };
 
   function fmt(sec) {
     var m = Math.floor(sec / 60), s = sec % 60;
@@ -27,14 +34,16 @@
   window.Recorder = {
     mount: function (host, opts) {
       opts = opts || {};
-      if (!SR) return null; // 环境不支持：不渲染组件，由页面回退旧版隐藏按钮逻辑
+      var asrCfg = opts.asr || null;
+      if (!SR && !(asrCfg && asrCfg.enabled && window.MediaRecorder)) return null;
       if (host._recorderInst) return host._recorderInst;
       var compact = !!opts.compact;
       var fullText = '';
       var live = false, starting = false, processing = false;
-      var rec = null, want = false;
+      var rec = null, want = false, srHadText = false, srFatal = false;
       var timer = null, secs = 0;
       var waveTimer = null, audioCtx = null, analyser = null, stream = null, rafId = null;
+      var mediaRec = null, asrStream = null, asrBusy = false, asrActive = false;
 
       /* ---- DOM ---- */
       var root = document.createElement('div');
@@ -61,12 +70,13 @@
       function setState(mode) {
         root.classList.toggle('recording', mode === 'rec');
         root.classList.toggle('processing', mode === 'proc');
-        if (mode === 'rec') { btn.textContent = '⏹'; btn.setAttribute('aria-label', '停止录音'); statusEl.textContent = '录音中'; }
+        if (mode === 'rec') { btn.textContent = '⏹'; btn.setAttribute('aria-label', '停止录音'); if (!statusEl.textContent) statusEl.textContent = '识别中…'; }
         else if (mode === 'proc') { btn.textContent = '…'; btn.setAttribute('aria-label', '处理中'); statusEl.textContent = '处理中…'; }
         else { btn.textContent = '🎤'; btn.setAttribute('aria-label', '开始录音'); statusEl.textContent = ''; }
       }
       function count() { countEl.textContent = '已识别 ' + fullText.replace(/\s/g, '').length + ' 字'; }
       function setInterim(t) { interimEl.textContent = t || ''; if (t) waveKick(); }
+      function say(msg) { statusEl.textContent = msg; }
 
       /* ---- 波形：真波形（AnalyserNode）为主，失败降级伪波形 ---- */
       var bars = [];
@@ -106,7 +116,6 @@
           })();
         }).catch(function () { startFakeWave(); }); /* 麦克风占用/权限冲突 → 伪波形，不挡录音 */
       }
-      /* 伪波形：随识别事件与时间随机跳动（iOS Safari 下 SR 独占麦克风时常见降级） */
       function startFakeWave() {
         bars = new Array(24).fill(0.06);
         waveTimer = setInterval(function () {
@@ -115,7 +124,7 @@
           drawWave();
         }, 120);
       }
-      function waveKick() { /* interim 到来时伪波形加一拍 */
+      function waveKick() {
         if (waveTimer) { for (var i = 0; i < bars.length; i++) bars[i] = 0.2 + Math.random() * 0.8; drawWave(); }
       }
       function stopWave() {
@@ -135,8 +144,57 @@
       }
       function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 
-      /* ---- SpeechRecognition：continuous + onend 自动重启 ---- */
+      /* ---- 通道2：云端分片转写（不依赖浏览器 SR，任何网络可用） ---- */
+      function appendFinal(t) {
+        fullText += t;
+        count();
+        setInterim('');
+        if (typeof opts.onFinal === 'function') opts.onFinal(t, fullText);
+      }
+      function startChunkASR() {
+        if (!asrCfg || !asrCfg.enabled || !window.MediaRecorder || !navigator.mediaDevices) return;
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+          if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
+          asrStream = s;
+          try {
+            mediaRec = new MediaRecorder(s);
+          } catch (e) { return; }
+          mediaRec.ondataavailable = function (e) {
+            if (!live || !e.data || !e.data.size) return;
+            if (srHadText || asrBusy) return; /* 浏览器识别已出字则不再走分片，避免重复 */
+            asrBusy = true;
+            var fd = new FormData();
+            fd.append('audio', e.data, 'chunk.webm');
+            fetch(asrCfg.url, { method: 'POST', body: fd })
+              .then(function (r) { return r.json(); })
+              .then(function (j) {
+                asrBusy = false;
+                if (!live) return;
+                if (j && j.ok && j.text) {
+                  if (srHadText) return;
+                  appendFinal(j.text);
+                  say('云端分片转写中');
+                } else if (j && j.error) {
+                  say('分片转写暂不可用（' + j.error + '）');
+                }
+              })
+              .catch(function () { asrBusy = false; });
+          };
+          mediaRec.start(4000); /* 每 4s 产生一个分片 */
+          asrActive = true;
+          if (!srHadText) say('云端分片转写中…');
+        }).catch(function () { /* 麦克风被 SR 占用等：静默，SR 仍可用 */ });
+      }
+      function stopChunkASR() {
+        if (mediaRec && mediaRec.state !== 'inactive') { try { mediaRec.stop(); } catch (e) {} }
+        mediaRec = null;
+        if (asrStream) { asrStream.getTracks().forEach(function (t) { t.stop(); }); asrStream = null; }
+        asrActive = false;
+      }
+
+      /* ---- 通道1：SpeechRecognition（continuous + onend 自动重启 + 错误可视化） ---- */
       function startSR() {
+        if (!SR) return;
         want = true;
         rec = new SR();
         rec.lang = 'zh-CN';
@@ -148,37 +206,44 @@
             if (ev.results[i].isFinal) fin += ev.results[i][0].transcript;
             else interim += ev.results[i][0].transcript;
           }
+          if (fin || interim) srHadText = true;
           if (fin) {
-            fullText += fin;
-            count();
-            if (typeof opts.onFinal === 'function') opts.onFinal(fin, fullText);
+            appendFinal(fin);
+            say('识别中…');
           }
           setInterim(interim);
           if (typeof opts.onInterim === 'function') opts.onInterim(interim);
         };
         rec.onend = function () {
-          /* 部分浏览器 continuous 会中断：仍在录音态则自动重启 */
-          if (want) { setTimeout(function () { try { rec.start(); } catch (e) { hardStop(); } }, 250); }
+          if (want && !srFatal) { setTimeout(function () { try { rec.start(); } catch (e) { hardStop(); } }, 250); }
         };
         rec.onerror = function (ev) {
-          if (ev && ev.error === 'not-allowed') { hardStop(); return; }
-          /* no-speech / network 等瞬时错误交给 onend 重启逻辑 */
+          var code = ev && ev.error;
+          if (code === 'not-allowed' || code === 'service-not-allowed') { say(ERRMSG[code]); srFatal = true; hardStop(); return; }
+          if (code === 'network') {
+            srFatal = true; /* 不再无限重启 */
+            if (asrActive) say(ERRMSG.network);
+            else say('浏览器识别服务不可达，且未配置云端转写');
+            return;
+          }
+          if (code === 'no-speech' || code === 'audio-capture') say(ERRMSG[code] || code);
         };
-        try { rec.start(); } catch (e) { hardStop(); }
+        try { rec.start(); } catch (e) { /* SR 启动失败时云端分片仍可工作 */ }
       }
       function hardStop() {
         want = false; live = false;
-        stopTimer(); stopWave();
+        stopTimer(); stopWave(); stopChunkASR();
         setState('idle');
         if (typeof opts.onStop === 'function') opts.onStop(fullText);
       }
 
       btn.onclick = function () {
         if (processing) return;
-        if (live) { /* 停止：进入处理中一瞬后复位 */
+        if (live) {
           processing = true; setState('proc');
-          want = false;
-          try { rec.stop(); } catch (e) {}
+          want = false; srFatal = false;
+          try { rec && rec.stop(); } catch (e) {}
+          stopChunkASR();
           setTimeout(function () {
             live = false; processing = false;
             stopTimer(); stopWave(); setState('idle');
@@ -187,10 +252,12 @@
           }, 200);
           return;
         }
-        live = true; fullText = ''; count(); setState('rec');
+        live = true; fullText = ''; srHadText = false; srFatal = false; asrBusy = false;
+        count(); setState('rec');
         startTimer();
-        startRealWave(); /* 内部失败自动降级伪波形 */
+        startRealWave();
         startSR();
+        startChunkASR(); /* 与 SR 并行，SR 出字则分片自动让位 */
       };
 
       var inst = {
