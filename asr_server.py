@@ -32,10 +32,16 @@ async def transcriptions(audio: UploadFile = File(...), model_name: str = Form("
         if not pcm:
             raise ValueError("no audio frames")
         audio_arr = np.concatenate([p.flatten() for p in pcm]).astype(np.float32) / 32768.0
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(400, f"decode audio failed: {e}")
+        magic = data[:16].hex()
+        raise HTTPException(400, f"decode audio failed: {e} | size={len(data)} magic={magic}")
     segments, info = model.transcribe(audio_arr, language="zh", vad_filter=True,
-                                      initial_prompt="以下是普通话简体中文门诊对话。")
+                                      initial_prompt="以下是普通话简体中文门诊医患对话。",
+                                      condition_on_previous_text=False,
+                                      no_speech_threshold=0.6,
+                                      log_prob_threshold=-1.0)
     text = "".join(s.text for s in segments).strip()
     return JSONResponse({"text": text, "language": info.language})
 
@@ -45,4 +51,4 @@ def models():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    uvicorn.run(app, host=os.environ.get("ASR_HOST", "127.0.0.1"), port=int(os.environ.get("ASR_PORT", "8765")), log_level="warning")

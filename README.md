@@ -120,3 +120,13 @@
 - 错误可视化：权限被拒/网络不可达/未检测到语音均有中文状态提示，不再静默 0 字
 - 本机自建 ASR：`python asr_server.py`（faster-whisper small，端口 8765，需 `.asr_venv`：`pip install faster-whisper fastapi uvicorn python-multipart av`）
 - 浏览器识别一旦出字，分片通道自动让位，避免重复；两通道计数共用「已识别 X 字」
+
+## 生产架构（2026-11-11）
+- **服务器**：43.160.196.55（OpenCloudOS + 宝塔），站点根 /www/wwwroot/youyibang.com
+- **ASR**：服务器本地 systemd `yyb-asr`（faster-whisper base，端口 18765，模型经 HF 镜像 hf-mirror.com 下载；低内存可 ASR_MODEL=tiny）
+- **LLM**：内网 M5 网关（glm-5.3-flash）经 **Mac SSH 反向隧道** 引入服务器 127.0.0.1:18770
+  - Mac 守护脚本 `llm_tunnel_keeper.sh`（断线 5s 重连）；服务器 config.php `$LLM_ENDPOINTS` 第一位为隧道端点，故障自动切换
+  - glm-5.3-flash 为思考型模型：`llm_chat` 已加 `max_tokens=4096` + `chat_template_kwargs.enable_thinking=false`
+- **php-fpm**：request_terminate_timeout 已调至 300（LLM 长请求）
+- **浏览器分片转写**：WebAudio PCM 4s 切片 + 前端编码 WAV 16k 上传（绕开 WebKit MediaRecorder 不支持 timeslice 的缺陷），勿用 MediaRecorder
+- 改 PHP 后需 `kill -USR2 <php-fpm master pid>` 或宝塔重载；前端 JS 改动请同步 bump `?v=` 版本号防缓存
