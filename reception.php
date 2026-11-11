@@ -601,7 +601,7 @@ async function openVisit(vid) {
   const p = j.patient;
   $('ptbar').innerHTML = `<span class="gavic">${p.gender === '女' ? '♀' : '♂'}</span><b>${esc(p.name)}</b>
     <span class="meta">${esc(p.gender)} · ${esc(p.age)}岁 · ${esc(p.phone || p.archive_no || '')}</span>
-    <span class="doc-chip">陈志强 - 全科</span><span class="fee">挂号费 <b>¥${(+p.reg_fee).toFixed(2)}</b></span>
+    <span class="doc-chip">施宣赫 - 中医科</span><span class="fee">挂号费 <b>¥${(+p.reg_fee).toFixed(2)}</b></span>
     <span class="paytype">自费</span>
     <button class="btn outline sm" title="编辑患者档案" onclick="openEditPt()">✏️</button>
     ${p.case_id ? `<a class="btn outline sm" style="color:#00b578;border-color:#00b578" href="case.php?id=${p.case_id}">进入医案 →</a>` : ''}
