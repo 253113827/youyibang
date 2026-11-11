@@ -3,12 +3,13 @@
 启动：/Users/sxh/WorkBuddy/2026-11-11-11-41-30/.asr_venv/bin/python asr_server.py
 """
 import io
+import os
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 import faster_whisper
 
-MODEL_SIZE = "small"
+MODEL_SIZE = os.environ.get("ASR_MODEL", "small")
 app = FastAPI()
 print(f"loading faster-whisper {MODEL_SIZE} ...", flush=True)
 model = faster_whisper.WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
