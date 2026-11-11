@@ -270,7 +270,7 @@ table.rx .rowdel:hover { color:var(--danger); }
 <body data-view="mid">
 <nav class="navbar">
   <span class="logo">有医帮</span>
-  <span class="clinic">仁和堂诊所</span>
+  <span class="clinic">福俭堂国医馆</span>
   <a class="act" href="reception.php">门诊</a>
   <a href="index.php">医案问诊</a>
   <span class="desk-only"><span class="mod dis">预约</span><span class="mod dis">收费</span><span class="mod dis">药房</span><span class="mod dis">执行</span><span class="mod dis">检查</span><span class="mod dis">库存<sup>1</sup></span><span class="mod dis">患者管理<sup>20</sup></span><span class="mod dis">微信</span><span class="mod dis">管理</span><span class="mod dis">更多 ▾</span><span class="mod dis">商城</span></span>
