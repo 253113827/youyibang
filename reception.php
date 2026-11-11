@@ -15,7 +15,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <link rel="stylesheet" href="assets/style.css?v=2">
 <script src="assets/speech.js?v=3"></script>
 <script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
-<script src="assets/recorder.js?v=10"></script>
+<script src="assets/recorder.js?v=11"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
@@ -1049,15 +1049,21 @@ async function refineFullRecording(recId, realtimeText) {
   const dur = Math.round(window._recDuration || 0);
   $('rf_realtime').value = realtimeText || '（无实时转写）';
   $('rf_refined').value = '';
-  $('rfNote').textContent = 'AI 正在重新精听整段录音' + (dur ? '（' + fmtSec(dur) + '，约需 ' + Math.max(3, Math.round(dur / 12)) + ' 秒）' : '') + '，请稍候…';
   $('mRefine').classList.add('show');
+  if (!window._lastRecBlob || window._lastRecBlob.size < 2000) {
+    $('rfNote').textContent = '缺少有效录音数据（可能浏览器未授权麦克风或录音过短），无法精转。实时转写仍可用。';
+    return;
+  }
+  $('rfNote').textContent = 'AI 正在重新精听整段录音' + (dur ? '（' + fmtSec(dur) + '，约需 ' + Math.max(3, Math.round(dur / 12)) + ' 秒）' : '') + '，请稍候…';
+  $('orgNote').textContent = '精听校对弹窗已打开，请确认转写内容';
   try {
-    /* 归档音频已在服务器，直接按 visit 取最新一条；前端把 blob 已存 window._lastRecBlob 亦可直接传 */
     const fd = new FormData();
     fd.append('visit_id', CUR.visit);
-    if (window._lastRecBlob) fd.append('audio', window._lastRecBlob, 'full.webm');
-    else { $('rfNote').textContent = '缺少录音数据，无法精转'; return; }
-    const r = await fetch(A + 'asr_full', { method: 'POST', body: fd });
+    fd.append('audio', window._lastRecBlob, 'full.webm');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180000); /* 前端 3 分钟超时，避免无限等待 */
+    const r = await fetch(A + 'asr_full', { method: 'POST', body: fd, signal: ctrl.signal });
+    clearTimeout(timer);
     const j = await r.json();
     if (j.ok && j.text) {
       $('rf_refined').value = j.text;
@@ -1067,7 +1073,9 @@ async function refineFullRecording(recId, realtimeText) {
       $('rfNote').textContent = '精转失败：' + (j.error || '未知错误') + '。实时转写仍可正常使用。';
     }
   } catch (e) {
-    $('rfNote').textContent = '精转请求失败（网络异常），实时转写仍可正常使用。';
+    $('rfNote').textContent = (e && e.name === 'AbortError')
+      ? '精转超时（录音过长或网络慢），请改用实时转写结果或稍后重试。'
+      : '精转请求失败（网络异常），实时转写仍可正常使用。';
   }
 }
 function closeRefine() { $('mRefine').classList.remove('show'); }

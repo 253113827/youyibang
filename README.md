@@ -198,3 +198,9 @@
 - 精度对比：实时分片偶发丢字，整段精转上下文完整（实测同一音频"主诉/伴有"全对）
 - 整段耗时约音频时长/12（M5 MPS），弹窗内显示预计时间；放弃则保留实时转写结果
 - M5 部署：`~/r2t2_full_server.py`（与实时服务 18780 相互独立，busy 不互相阻塞）
+
+### 精转无返回修复（2026-11-11 21:10）
+- **根因**：Chrome/Safari 自动播放策略——AudioContext 创建后默认 suspended，ScriptProcessor 不出数据 → 归档录音是无效音频（服务器报 audio too short），精转请求空手而归
+- **修复**：新增 liveCtx()，三处 AudioContext 创建后立即 resume()（分片/流式+归档/波形三路）
+- **加固**：前端精转 fetch 加 3 分钟 AbortController 超时（不再无限等待）；asr_full 失败写 error_log（[yyb-asrfull]）；无有效 blob 时明确提示
+- **实测**：用户真实 2 分钟 webm 录音精转 15 秒返回，采用后正确写入

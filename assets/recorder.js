@@ -101,7 +101,7 @@
         if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { startFakeWave(); return; }
         navigator.mediaDevices.getUserMedia(farConstraints()).then(function (s) {
           stream = s;
-          audioCtx = new AC();
+          audioCtx = liveCtx(AC);
           var src = audioCtx.createMediaStreamSource(s);
           analyser = audioCtx.createAnalyser();
           analyser.fftSize = 256;
@@ -173,6 +173,15 @@
         if (farChk) farChk.addEventListener('change', apply);
         gain.connect(comp);
         return { input: gain, output: comp };
+      }
+
+      /* Chrome/Safari 自动播放策略：AudioContext 创建后默认 suspended，
+       * 不 resume 则 ScriptProcessor 不出数据 → 分片/归档全是无效音频。
+       * 必须在用户手势（点击录音按钮）内创建并 resume。 */
+      function liveCtx(AC2) {
+        var c = new AC2();
+        if (c.state === 'suspended' && c.resume) { try { c.resume(); } catch (e) {} }
+        return c;
       }
 
       /* ---- 通道2：云端分片转写（不依赖浏览器 SR，任何网络可用） ---- */
@@ -258,7 +267,7 @@
         navigator.mediaDevices.getUserMedia(farConstraints()).then(function (s) {
           if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
           asrStream = s;
-          asrCtx = new AC2();
+          asrCtx = liveCtx(AC2);
           asrSrc = asrCtx.createMediaStreamSource(s);
           var boost = makeBoost(asrCtx); /* 远距增益链 */
           asrProc = asrCtx.createScriptProcessor(4096, 1, 1);
@@ -392,7 +401,7 @@
             wsLive = true;
             say('流式转写中…');
             var AC2 = window.AudioContext || window.webkitAudioContext;
-            wsAudioCtx = new AC2();
+            wsAudioCtx = liveCtx(AC2);
             wsSrc = wsAudioCtx.createMediaStreamSource(s);
             var wboost = makeBoost(wsAudioCtx); /* 远距增益链 */
             wsProc = wsAudioCtx.createScriptProcessor(4096, 1, 1);

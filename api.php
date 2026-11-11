@@ -735,6 +735,7 @@ case 'asr_full': {
         }
         $err = $cerr ?: "HTTP {$http} {$body}";
     }
+    error_log("[yyb-asrfull] FAIL visit={$vid} size=" . filesize($tmp) . " err=" . substr($err, 0, 300));
     fail('整段精转暂不可用：' . $err);
 }
 
