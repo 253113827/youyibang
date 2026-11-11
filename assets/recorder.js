@@ -290,11 +290,32 @@
           };
           asrSrc.connect(boost.input); boost.output.connect(asrProc);
           asrProc.connect(mute); mute.connect(asrCtx.destination);
+          /* 整段归档录音：与分片通道共用同一路麦克风（录「增益后」混音流，存档音量与识别一致）。
+           * 注意不能挂在流式 WS 的 onopen 里——WS 不通时归档会静默丢失 */
+          try {
+            var aDest = asrCtx.createMediaStreamDestination();
+            boost.output.connect(aDest);
+            archChunks = [];
+            archRec = new MediaRecorder(aDest.stream);
+            archRec.ondataavailable = function (e) { if (e.data && e.data.size) archChunks.push(e.data); };
+            archRec.onstop = function () {
+              if (archChunks.length) {
+                var types = archChunks.map(function (c) { return c.type; });
+                var sz = archChunks.reduce(function (s, c) { return s + c.size; }, 0);
+                window._lastRecBlob = new Blob(archChunks, { type: types[0] || 'audio/webm' });
+                window._lastRecBlobSize = sz;
+              }
+              archChunks = [];
+            };
+            archRec.start();
+          } catch (e) { archRec = null; }
           asrActive = true;
           say('云端分片转写中…');
         }).catch(function (e) { say('分片通道麦克风失败：' + (e && e.name)); });
       }
       function stopChunkASR() {
+        if (archRec && archRec.state !== 'inactive') { try { archRec.stop(); } catch (e) {} }
+        archRec = null;
         if (asrProc) { try { asrProc.disconnect(); } catch (e) {} asrProc = null; }
         if (asrSrc) { try { asrSrc.disconnect(); } catch (e) {} asrSrc = null; }
         if (asrCtx) { try { asrCtx.close(); } catch (e) {} asrCtx = null; }
@@ -406,22 +427,6 @@
             var wboost = makeBoost(wsAudioCtx); /* 远距增益链 */
             wsProc = wsAudioCtx.createScriptProcessor(4096, 1, 1);
             var mute = wsAudioCtx.createGain(); mute.gain.value = 0;
-            /* 整段归档录音：录「增益后」的混音流，存档音量与识别一致 */
-            try {
-              var wsDest = wsAudioCtx.createMediaStreamDestination();
-              wboost.output.connect(wsDest);
-              archChunks = [];
-              archRec = new MediaRecorder(wsDest.stream);
-              archRec.ondataavailable = function (e) { if (e.data && e.data.size) archChunks.push(e.data); };
-              archRec.onstop = function () {
-                if (archChunks.length) {
-                  var types = archChunks.map(function (c) { return c.type; });
-                  window._lastRecBlob = new Blob(archChunks, { type: types[0] || 'audio/webm' });
-                }
-                archChunks = [];
-              };
-              archRec.start();
-            } catch (e) { archRec = null; }
             var downCnt = 0;
             wsProc.onaudioprocess = function (e) {
               if (!wsLive) return;

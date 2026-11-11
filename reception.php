@@ -15,7 +15,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <link rel="stylesheet" href="assets/style.css?v=2">
 <script src="assets/speech.js?v=3"></script>
 <script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
-<script src="assets/recorder.js?v=11"></script>
+<script src="assets/recorder.js?v=12"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
@@ -438,12 +438,13 @@ table.rx .rowdel:hover { color:var(--danger); }
 <div class="modal" id="mRefine">
   <div class="box" style="width:640px">
     <h3>🎧 整段精听校对（更准确）</h3>
-    <p class="hint" id="rfNote">AI 正在重新精听整段录音， accuracy 高于实时转写…</p>
+    <p class="hint" id="rfNote">等待精听校对…</p>
     <label class="fl">实时转写（分片，仅供对照）
       <textarea id="rf_realtime" rows="4" style="background:#f7f7f7;color:#888" readonly></textarea></label>
     <label class="fl">精转稿（可编辑修正，确认后采用）
       <textarea id="rf_refined" rows="7"></textarea></label>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+      <button class="btn outline sm" id="rfRetry" style="display:none" onclick="refineFullRecording(window._refineRecId||window.__lastRecId||0)">🔄 重新精转</button>
       <button class="btn gray sm" onclick="closeRefine()">放弃</button>
       <button class="btn green sm" onclick="applyRefine()">✅ 采用精转稿</button>
     </div>
@@ -1044,12 +1045,39 @@ async function uploadRecording(blob, fullText) {
   } catch (e) {}
   return null;
 }
+/* 完成提醒：蜂鸣三声 + 页面标题闪烁（精转/归档完成时唤起医生注意） */
+let _titleTimer = null;
+function notifyAttention(msg) {
+  $('orgNote').textContent = msg;
+  try { /* 蜂鸣：三短音 */
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    if (ac.state === 'suspended') ac.resume();
+    [0, 0.25, 0.5].forEach(t => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.value = 880; g.gain.value = 0.15;
+      o.connect(g); g.connect(ac.destination);
+      o.start(ac.currentTime + t); o.stop(ac.currentTime + t + 0.12);
+      g.gain.setValueAtTime(0.15, ac.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + t + 0.12);
+    });
+    setTimeout(() => ac.close(), 1200);
+  } catch (e) {}
+  if (_titleTimer) clearInterval(_titleTimer);
+  let on = false;
+  _titleTimer = setInterval(() => {
+    document.title = (on = !on) ? '🔔 ' + msg : '有医帮 - 接诊工作台';
+  }, 900);
+  /* 15 秒后停止闪烁 */
+  setTimeout(() => { clearInterval(_titleTimer); document.title = '有医帮 - 接诊工作台'; }, 15000);
+}
 /* 整段精听校对：录音结束后自动用整段音频重新识别（精度高于 2s 分片），弹窗对照修正后采用 */
 async function refineFullRecording(recId, realtimeText) {
   const dur = Math.round(window._recDuration || 0);
   $('rf_realtime').value = realtimeText || '（无实时转写）';
   $('rf_refined').value = '';
   $('mRefine').classList.add('show');
+  $('rfRetry').style.display = 'none';
+  window.__lastRecId = recId || window.__lastRecId || 0;
   if (!window._lastRecBlob || window._lastRecBlob.size < 2000) {
     $('rfNote').textContent = '缺少有效录音数据（可能浏览器未授权麦克风或录音过短），无法精转。实时转写仍可用。';
     return;
@@ -1067,15 +1095,20 @@ async function refineFullRecording(recId, realtimeText) {
     const j = await r.json();
     if (j.ok && j.text) {
       $('rf_refined').value = j.text;
-      $('rfNote').textContent = '精转完成。请对照修正，确认无误后点「采用精转稿」（同时更新本条录音的逐字稿）';
+      $('rfNote').textContent = '🔔 精转完成！请对照修正，确认无误后点「采用精转稿」（同时更新本条录音的逐字稿）';
       window._refineRecId = recId;
+      notifyAttention('精听校对已完成，请确认转写结果');
     } else {
-      $('rfNote').textContent = '精转失败：' + (j.error || '未知错误') + '。实时转写仍可正常使用。';
+      $('rfNote').textContent = '精转失败：' + (j.error || '未知错误') + '。可点「重新精转」重试，或采用实时转写结果。';
+      $('rfRetry').style.display = 'inline-block';
+      notifyAttention('精转失败，已保留实时转写结果');
     }
   } catch (e) {
     $('rfNote').textContent = (e && e.name === 'AbortError')
-      ? '精转超时（录音过长或网络慢），请改用实时转写结果或稍后重试。'
-      : '精转请求失败（网络异常），实时转写仍可正常使用。';
+      ? '精转超时（录音过长或网络慢），可点「重新精转」重试。'
+      : '精转请求失败（网络异常），可点「重新精转」重试。';
+    $('rfRetry').style.display = 'inline-block';
+    notifyAttention('精转请求异常，已保留实时转写结果');
   }
 }
 function closeRefine() { $('mRefine').classList.remove('show'); }
@@ -1155,15 +1188,18 @@ function recorderInit() {
       el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + fin;
     },
     onStop: function (fullText, blob) {
-      $('orgNote').textContent = '录音结束，正在归档并精听校对…';
       /* 录音归档：整段音频上传 + 转写随存（可回放/修正）；随后自动整段精转弹窗校对 */
       if (blob && blob.size > 2000) {
+        $('orgNote').textContent = '录音结束，正在归档并精听校对…（完成后会有🔔提醒）';
         window._recDuration = (window.REC && REC.durationSec) ? REC.durationSec() : 0;
         window._lastRecBlob = blob;
         uploadRecording(blob, fullText).then(recId => {
           if (recId && window.YYB_ASR === true) refineFullRecording(recId, fullText);
-          else $('orgNote').textContent = '录音已归档，可编辑转写后点击「整理成病历」';
+          else if (recId) { $('orgNote').textContent = '录音已归档，可编辑转写后点击「整理成病历」'; notifyAttention('录音已归档'); }
+          else { $('orgNote').textContent = '归档上传失败（网络原因），转写内容仍可用；可稍后重试'; notifyAttention('录音归档失败'); }
         });
+      } else {
+        $('orgNote').textContent = '⚠️ 本次录音数据无效（时长过短或麦克风被占用），未归档；实时转写内容仍可用';
       }
     }
   });
