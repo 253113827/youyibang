@@ -809,11 +809,14 @@ case 'asr_chunk': {
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 20,
+            CURLOPT_TIMEOUT => 90,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+            CURLOPT_PROXY => '', /* 强制直连：fpm 环境若有 http_proxy 会导致内网请求挂起 */
             CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $ep['key']],
             CURLOPT_POSTFIELDS => [
                 'model' => $ep['model'] ?? 'whisper-1',
-                'audio' => new CURLFile($tmp, 'audio/webm', 'chunk.webm'),
+                'audio' => new CURLFile($tmp, 'audio/wav', 'chunk.wav'),
             ],
         ]);
         $body = curl_exec($ch);
@@ -822,7 +825,10 @@ case 'asr_chunk': {
         curl_close($ch);
         if ($body !== false && $http === 200) {
             $j = json_decode($body, true);
-            if (isset($j['text'])) ok(['text' => trim($j['text'])]);
+            /* text 字段存在即成功（空 text = 静音分片或 ASR 忙丢弃，属正常） */
+            if (is_array($j) && array_key_exists('text', $j)) {
+                ok(['text' => trim((string)$j['text']), 'note' => (string)($j['note'] ?? '')]);
+            }
         }
         $err = $cerr ?: "HTTP {$http} {$body}";
     }

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""有医帮 本地 ASR 服务：OpenAI 兼容 /v1/audio/transcriptions（faster-whisper，small 模型）
-启动：/Users/sxh/WorkBuddy/2026-11-11-11-41-30/.asr_venv/bin/python asr_server.py
+"""有医帮 本地 ASR 服务：OpenAI 兼容 /v1/audio/transcriptions（faster-whisper）
+- ASR_MODEL 环境变量：模型规格（small/base/tiny，默认 small）
+- ASR_PORT/ASR_HOST：监听地址
+- 端点为同步 def（线程池执行），转写期间事件循环不阻塞；ASR_LOCK 保证同时只转一片，忙时丢弃
 """
 import io
 import os
+import threading
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
@@ -15,11 +18,9 @@ print(f"loading faster-whisper {MODEL_SIZE} ...", flush=True)
 model = faster_whisper.WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
 print("model ready", flush=True)
 
-@app.post("/v1/audio/transcriptions")
-async def transcriptions(audio: UploadFile = File(...), model_name: str = Form("whisper-1")):
-    data = await audio.read()
-    if not data:
-        raise HTTPException(400, "empty audio")
+ASR_LOCK = threading.Lock()
+
+def _do_transcribe(data: bytes) -> str:
     try:
         import av
         container = av.open(io.BytesIO(data))
@@ -32,8 +33,6 @@ async def transcriptions(audio: UploadFile = File(...), model_name: str = Form("
         if not pcm:
             raise ValueError("no audio frames")
         audio_arr = np.concatenate([p.flatten() for p in pcm]).astype(np.float32) / 32768.0
-    except HTTPException:
-        raise
     except Exception as e:
         magic = data[:16].hex()
         raise HTTPException(400, f"decode audio failed: {e} | size={len(data)} magic={magic}")
@@ -42,8 +41,22 @@ async def transcriptions(audio: UploadFile = File(...), model_name: str = Form("
                                       condition_on_previous_text=False,
                                       no_speech_threshold=0.6,
                                       log_prob_threshold=-1.0)
-    text = "".join(s.text for s in segments).strip()
-    return JSONResponse({"text": text, "language": info.language})
+    return "".join(s.text for s in segments).strip()
+
+# 同步 def：FastAPI 自动放线程池，不阻塞事件循环
+@app.post("/v1/audio/transcriptions")
+def transcriptions(audio: UploadFile = File(...), model_name: str = Form("whisper-1")):
+    data = audio.file.read()
+    if not data:
+        raise HTTPException(400, "empty audio")
+    if not ASR_LOCK.acquire(blocking=False):
+        # 上一片还在转写：丢弃本片（前端会继续送后续分片），避免堆积雪崩
+        return JSONResponse({"text": "", "note": "busy"})
+    try:
+        text = _do_transcribe(data)
+    finally:
+        ASR_LOCK.release()
+    return JSONResponse({"text": text})
 
 @app.get("/v1/models")
 def models():
