@@ -619,12 +619,13 @@ case 'ai_treatment': {
 {$dx}
 
 # 输出要求（严格 JSON，只输出 JSON 本体不要代码块）
-{"chinese_rx":[{"name":"饮片名","qty_g":10,"prep":"炮制（可空，如清炒/蜜炙）","decoct":"特殊煎法（可空，如先煎/后下/包煎）","note":"配伍用意","source":"出处（如：《方剂学》逍遥散／《中国药典》2020版）"}],"formula":"推荐方剂名（如：龙胆泻肝汤加减）","formula_source":"方剂出处（如：《方剂学》新世纪第5版／《太平惠民和剂局方》）","aux_tests":[{"name":"检查项目名","times":1}],"notes":"医嘱：忌口/煎服法等"}
+{"chinese_rx":[{"name":"饮片名","qty_g":10,"prep":"炮制（可空，如清炒/蜜炙）","decoct":"特殊煎法（可空，如先煎/后下/包煎）","note":"配伍用意","source":"出处（如：《方剂学》逍遥散／《中国药典》2020版）"}],"formula":"推荐方剂名（如：龙胆泻肝汤加减）","formula_source":"方剂出处（如：《方剂学》新世纪第5版／《太平惠民和剂局方》）","physio":[{"type":"针灸/艾灸/刮痧/拔罐/推拿","name":"方案名（如：针灸疏风散寒）","detail":"具体穴位或部位与操作（如：风池、风府、合谷、列缺，平补平泻，留针20分钟）","course":"疗程（如：每日1次×5天）","source":"出处（如：《针灸学》新世纪第5版）"}],"aux_tests":[{"name":"检查项目名","times":1}],"notes":"医嘱：忌口/煎服法等"}
 
 # 规则
 1. 6-12 味饮片，剂量以克为单位符合《中国药典》2020版常规用量；严守十八反十九畏；与过敏史冲突时换药并在 note 说明。
 2. 每味药 source 标注出处；formula 与 formula_source 必填。
 3. aux_tests 为建议的辅助检查（0-3 项）。
+4. physio 为该证的中医理疗方案（1-3 项，针灸须列具体穴位与手法，出处标《针灸学》等教材；与病情不符的理疗类型不要输出）。
 P;
     } else {
         $prompt = <<<P
@@ -654,6 +655,7 @@ P;
     if (!is_array($j)) fail('AI 返回格式异常，请重试');
     if ($type === 'tcm') {
         ok(['chinese_rx' => (array)($j['chinese_rx'] ?? []), 'formula' => (string)($j['formula'] ?? ''),
+            'physio' => (array)($j['physio'] ?? []),
             'aux_tests' => (array)($j['aux_tests'] ?? []), 'notes' => (string)($j['notes'] ?? ''), 'type' => 'tcm']);
     }
     ok(['western_rx' => (array)($j['western_rx'] ?? []), 'aux_tests' => (array)($j['aux_tests'] ?? []),
@@ -899,11 +901,21 @@ case 'print_opd': {
         $rows = '';
         foreach ($items as $i => $it) {
             $grand += (float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0);
-            $rows .= '<tr><td>' . ($i + 1) . '</td><td>' . $e($it['name'] ?? '') . ($it['spec'] ? '（' . $e($it['spec']) . '）' : '')
-                . '</td><td>' . $e($it['usage'] ?? '') . '</td><td>' . $e($it['freq'] ?? '') . '</td><td>' . $e(($it['dose'] ?? '') . '×' . ($it['days'] ?? '') . '天')
-                . '</td><td>' . $e($it['qty'] ?? '') . '</td><td>' . number_format((float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0), 2) . '</td></tr>';
+            $isTcm = $r['type'] === 'chinese';
+            if ($isTcm) {
+                /* 中药饮片：名称+炮制+克数+特殊煎法 */
+                $detail = $e($it['name'] ?? '') . (($it['prep'] ?? '') ? '（' . $e($it['prep']) . '）' : '')
+                    . '</td><td>' . $e(($it['qty_g'] ?? $it['dose'] ?? '') . 'g' . (($it['decoct'] ?? '') ? '，' . $e($it['decoct']) : ''))
+                    . '</td><td>' . $e(($it['qty'] ?? '') ? '×' . $it['qty'] . '剂' : '') . '</td><td>' . number_format((float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0), 2);
+                $rows .= '<tr><td>' . ($i + 1) . '</td><td>' . $detail . '</td></tr>';
+            } else {
+                $spec = (string)($it['spec'] ?? '');
+                $rows .= '<tr><td>' . ($i + 1) . '</td><td>' . $e($it['name'] ?? '') . ($spec !== '' ? '（' . $e($spec) . '）' : '')
+                    . '</td><td>' . $e($it['usage'] ?? '') . '</td><td>' . $e($it['freq'] ?? '') . '</td><td>' . $e(($it['dose'] ?? '') . '×' . ($it['days'] ?? '') . '天')
+                    . '</td><td>' . $e($it['qty'] ?? '') . '</td><td>' . number_format((float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0), 2) . '</td></tr>';
+            }
         }
-        if ($rows) $rxHtml .= '<h2>' . $e($typeCn[$r['type']] ?? $r['type']) . '</h2><table><tr><th>#</th><th>药品/项目</th><th>用法</th><th>频次</th><th>剂量/天数</th><th>数量</th><th>金额</th></tr>' . $rows . '</table>';
+        if ($rows) $rxHtml .= '<h2>' . $e($typeCn[$r['type']] ?? $r['type']) . '</h2><table>' . ($isTcm ? '<tr><th>#</th><th>饮片（炮制）</th><th>克数/煎法</th><th>剂数</th><th>金额</th></tr>' : '<tr><th>#</th><th>药品/项目</th><th>用法</th><th>频次</th><th>剂量/天数</th><th>数量</th><th>金额</th></tr>') . $rows . '</table>';
     }
     $aux = json_decode($rec['auxiliary_exam'] ?? '[]', true) ?: [];
     $trt = json_decode($rec['treatments'] ?? '[]', true) ?: [];
@@ -1005,12 +1017,15 @@ case 'organize_transcript': {
         $stdRule = "2. 按西医病历规范（《病历书写基本规范》）整理：【主诉】【现病史】【体格检查要点】三段结构；语言使用规范西医术语；";
     }
     $modeLabel2 = $mode === 'tcm' ? '中医' : '西医';
+    /* 临床诊断（可传）：用于按诊断规范补全病历结构，但不得编造未提及的内容 */
+    $dxCtx = trim($_POST['dx'] ?? '');
+    $dxNote = $dxCtx !== '' ? "\n6. 医生已初步诊断：【{$dxCtx}】——请参照该诊断的规范病历结构补全现病史要素（起病情况与诱因、主要症状特点、伴随症状、诊疗经过、精神饮食睡眠等一般情况）。【只允许整理对话中真实提及的内容并按规范措辞重组，对话未提及的要素一律写「未提及」，严禁编造】。" : '';
     $prompt = <<<P
 你是门诊病历整理助手（{$modeLabel2}标准）。下面是一段医患问诊的口语转写，请整理为规范病历文本：
 1. 去除语气词（嗯、啊、呃）、重复、寒暄与无关内容；
 {$stdRule}
 3. 保留所有医学信息，不得编造、不得遗漏症状/病程/诱因/伴随症/舌脉等；医学表述须符合教材规范；
-4. 末尾固定加一行："本整理由 AI 生成，请医生核对"。{$targetNote}
+4. 末尾固定加一行："本整理由 AI 生成，请医生核对"。{$targetNote}{$dxNote}
 5. 只输出严格 JSON，不要任何解释文字：{"chief_complaint":"主诉文本","present_illness":"现病史文本","tcm_summary":"四诊摘要/体格检查要点文本"}
 
 # 口语转写

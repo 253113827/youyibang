@@ -955,6 +955,17 @@ async function adoptDx(di, type = 'western') {
       rxCount++;
     });
   }
+  if (tp && type === 'tcm' && (tp.physio || []).length) {
+    /* 中医理疗方案（针灸/刮痧等）→ 写入「治疗项目」，含穴位/操作/疗程 */
+    (window._trt = window._trt || []);
+    tp.physio.forEach(x => {
+      if (!x || !x.name) return;
+      const line = String(x.type || '') + '：' + String(x.name || '') + (x.detail ? '（' + String(x.detail) + '）' : '') + (x.course ? '【' + String(x.course) + '】' : '');
+      window._trt.push({ name: line, price: 0, times: 1, _ai: true });
+      rxCount++;
+    });
+    renderTrt();
+  }
   if (tp && type === 'western' && (tp.western_rx || []).length) {
     _openSheets.western = true;
     if (clearAI) window._rx_western = (window._rx_western || []).filter(x => !x._ai);
@@ -1231,6 +1242,7 @@ async function organizeTranscript(mode = 'western') {
   fd.append('transcript', transcript);
   fd.append('visit_id', CUR.visit);
   fd.append('mode', mode);
+  if ($('f_dx').value.trim()) fd.append('dx', $('f_dx').value.trim()); /* 按诊断规范补全病历结构 */
   const r = await fetch(A + 'organize_transcript', { method: 'POST', body: fd });
   const j = await r.json();
   if (j.ok) {
