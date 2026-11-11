@@ -550,14 +550,15 @@ case 'ai_dx': {
 基于以上信息，给出 3-5 个鉴别诊断，按可能性从高到低排列。
 
 # 输出要求（严格 JSON）
-{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）"}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
+{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）","treatment_plan":{"western_rx":[{"name":"通用药名","spec":"常见规格","usage":"口服/静滴等","freq":"qd/bid/tid","dose":"单次剂量数字","dose_unit":"片/粒/袋/支","days":3,"qty":1,"qty_unit":"盒","note":"用药交代（可空）"}],"aux_tests":[{"name":"检查项目名","times":1}],"notes":"注意事项（可空）"}}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
 
 # 规则
 1. 只依据输入信息推理，不得虚构；信息不足写进 missing_info。
 2. 必须包含至少一条"需警惕但不能除外"的严重可治疾病。
 3. 涉及急危重指征时在 red_flags 写出转诊建议。
 4. associated_symptoms 为该诊断常见伴随症状词组（每条 2-6 字），供医生点击快捷写入病历。
-5. disclaimer 字段原样保留。
+5. treatment_plan 为该诊断的【基层常用标准治疗方案】模板（供医生采纳后核对修改）：西药给出通用名+常见规格+常规用法用量；aux_tests 为建议辅助检查；剂量须符合成人常规，注意与过敏史冲突时在 note 提示。价格不要输出。
+6. disclaimer 字段原样保留。
 P;
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
     if ($r === null) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）']);
@@ -763,8 +764,9 @@ pre { white-space: pre-wrap; font: inherit; }
 /* 一键整理医疗病历：口语转写 → 中医病历结构化（主诉/现病史/四诊摘要）
  * 上游离线时降级：返回 ok:false + raw 原始转写，前端兜底插入现病史，不丢数据。 */
 case 'asr_chunk': {
-    /* 云端分片转写：接收浏览器录音分片（webm/opus），转发到 OpenAI 兼容 /v1/audio/transcriptions */
+    /* 云端分片转写：接收浏览器录音分片（WAV PCM16），转发到 OpenAI 兼容 /v1/audio/transcriptions */
     if (empty($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) fail('缺少音频分片');
+    error_log('[yyb-asr] recv size=' . $_FILES['audio']['size'] . ' type=' . $_FILES['audio']['type']);
     if (empty($ASR_ENDPOINTS)) ok(['text' => '', 'note' => '未配置 ASR 端点']);
     $tmp = $_FILES['audio']['tmp_name'];
     $err = '';

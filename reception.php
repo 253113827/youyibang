@@ -782,16 +782,56 @@ async function aiDx() {
   const r = await fetch(A + 'ai_dx', { method: 'POST', body: fd }); const j = await r.json();
   if (!j.ok) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.error || '失败') + '</p>'; return; }
   if (!(j.differentials || []).length) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.note || 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）') + '</p>'; return; }
-  $('aiResult').innerHTML = '<p class="hint" style="padding:4px">⚠️ 以下内容仅供参考，点击症状标签可写入病历</p>' + j.differentials.map((d, di) =>
-    `<div class="aibox"><div class="dxname">${di + 1}. ${esc(d.diagnosis)}
+  window._aiData = j.differentials; window._aiAdopted = {};
+  $('aiResult').innerHTML = '<p class="hint" style="padding:4px">⚠️ 仅供参考；点「采纳」将诊断+检查+处方一键写入病历，请核对后保存</p>' + j.differentials.map((d, di) =>
+    `<div class="aibox" id="aidx_${di}"><div class="dxname">${di + 1}. ${esc(d.diagnosis)}
       <span class="conf" style="background:${d.confidence === '较可能' ? '#00b578' : (d.confidence === '可能' ? '#d48806' : '#c0392b')}">${esc(d.confidence || '可能')}</span></div>
      <div class="airow"><b>伴随：</b>${(d.associated_symptoms || []).map(s => `<span class="chip sym" onclick="appendSymptom('${esc(s)}')">＋ ${esc(s)}</span>`).join('') || '—'}</div>
      <div class="airow"><b>查体：</b>${esc(d.physical_findings || d.supporting || '—')}</div>
      <div class="airow"><b>检验：</b>${(d.suggested_tests || []).map(t => `<span class="pill blue">${esc(t)}</span>`).join('') || '—'}</div>
+     ${(d.treatment_plan && (d.treatment_plan.western_rx || []).length) ? `<div class="airow"><b>方案：</b>${d.treatment_plan.western_rx.map(x => `<span class="pill">${esc(x.name)} ${esc(x.spec || '')} ${esc(x.usage || '')} ${esc(x.freq || '')} ${esc(String(x.dose || ''))}${esc(x.dose_unit || '')}×${esc(String(x.days || ''))}天</span>`).join('')}</div>` : ''}
      ${d.against ? `<div class="airow"><b>不符点：</b>${esc(d.against)}</div>` : ''}
-     ${d.red_flags ? `<div class="airow"><b>🚩 转诊指征：</b><span class="pill redf">${esc(d.red_flags)}</span></div>` : ''}</div>`).join('')
+     ${d.red_flags ? `<div class="airow"><b>🚩 转诊指征：</b><span class="pill redf">${esc(d.red_flags)}</span></div>` : ''}
+     <div style="margin-top:6px"><button class="btn primary sm" onclick="adoptDx(${di})">✅ 采纳此诊断（写入病历+处方）</button></div></div>`).join('')
     + ((j.missing_info || []).length ? `<div class="aibox"><b style="font-size:12px">建议补充采集：</b>${j.missing_info.map(m => `<div style="font-size:12px">· ${esc(m)}</div>`).join('')}</div>` : '')
     + '<p class="ai-note">⚠️ ' + esc(j.disclaimer || 'AI 建议仅供参考，最终诊断以执业医师判断为准。') + '</p>';
+}
+/* 采纳 AI 诊断：诊断名→诊断栏；查体→体格检查；建议检验→辅助检查；推荐处方→西药处方签；注意事项→注意事项 */
+function adoptDx(di) {
+  if (!CUR.visit) return alert('未选择患者');
+  const d = (window._aiData || [])[di];
+  if (!d) return;
+  if (window._aiAdopted && window._aiAdopted[di]) return alert('该诊断已采纳过');
+  /* 诊断名：去掉 ICD-10 编码括号 */
+  const dxName = (d.diagnosis || '').replace(/[（(][A-Z]\d{2}[^）)]*[）)]/g, '').trim() || (d.diagnosis || '').trim();
+  if (dxName) appendField('f_dx', dxName);
+  const pf = d.physical_findings || d.supporting || '';
+  if (pf) appendField('pe_t', pf, true);
+  (d.suggested_tests || []).forEach(t => {
+    (window._aux = window._aux || []).push({ name: String(t), price: 0, times: 1 });
+  });
+  const tp = d.treatment_plan || {};
+  if ((tp.western_rx || []).length) {
+    _openSheets.western = true;
+    (window._rx_western = window._rx_western || []);
+    tp.western_rx.forEach(x => {
+      window._rx_western.push({
+        drug_id: null, name: String(x.name || ''), spec: String(x.spec || ''),
+        usage: String(x.usage || '口服'), freq: (FREQS.includes(x.freq) ? x.freq : 'bid'),
+        dose: String(x.dose ?? ''), dose_unit: DOSE_UNITS.includes(x.dose_unit) ? x.dose_unit : '片',
+        days: String(x.days ?? 3), qty: String(x.qty ?? 1),
+        qty_unit: (QTY_UNITS.western.includes(x.qty_unit) ? x.qty_unit : '盒'),
+        price: 0, note: String(x.note || '')
+      });
+    });
+  }
+  if (tp.notes) appendField('f_notes', String(tp.notes));
+  renderAux(); renderRx();
+  window._aiAdopted = window._aiAdopted || {}; window._aiAdopted[di] = true;
+  const box = document.getElementById('aidx_' + di);
+  if (box) { const b = box.querySelector('.btn.primary.sm'); if (b) { b.textContent = '✅ 已采纳'; b.classList.remove('primary'); b.classList.add('green'); b.onclick = null; } }
+  const cnt = (tp.western_rx || []).length;
+  alert('已采纳「' + dxName + '」：' + ((tp.western_rx || []).length ? cnt + ' 条西药、' : '') + ((d.suggested_tests || []).length ? (d.suggested_tests).length + ' 项检查' : '无检查') + '\n药品价格为 0，请核对修改后保存病历');
 }
 async function aiRxReview() {
   if (!CUR.visit) return alert('未选择患者');
