@@ -454,9 +454,8 @@ case 'queue': {
         WHERE v.doctor_id = ? AND DATE(v.registered_at) = CURDATE() AND p.is_deleted = 0
         ORDER BY FIELD(v.status,'waiting','in_visit','done'), v.id DESC");
     $today->execute([$uid]);
-    $hist = $pdo->prepare("SELECT v.id, v.finished_at, r.diagnosis, p.name, u.id AS uid
+    $hist = $pdo->prepare("SELECT v.id, v.finished_at, r.diagnosis, p.name, v.doctor_id AS uid
         FROM visits v JOIN patients p ON p.id = v.patient_id
-        JOIN users u ON u.id = v.doctor_id
         LEFT JOIN opd_records r ON r.visit_id = v.id
         WHERE v.doctor_id = ? AND v.status = 'done' AND DATE(v.registered_at) < CURDATE() AND p.is_deleted = 0
         ORDER BY v.finished_at DESC LIMIT 30");

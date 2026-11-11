@@ -2,7 +2,7 @@
 require __DIR__ . '/config.php';
 need_login();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['do'] ?? 'create') === 'create') {
     $stmt = db()->prepare('INSERT INTO cases (user_id, patient_name, gender, age, chief_complaint) VALUES (?,?,?,?,?)');
     $stmt->execute([$_SESSION['uid'] ?? 1, trim($_POST['patient_name'] ?? ''), $_POST['gender'] ?? '未知', trim($_POST['age'] ?? ''), trim($_POST['chief_complaint'] ?? '')]);
     $cid = (int)db()->lastInsertId();

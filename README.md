@@ -241,3 +241,8 @@
 - **医案（index.php）**：每条医案卡片带 ✏️ 编辑（预填表单）/ 🗑 删除（确认）；`case_update`/`case_del` 软删除 API，列表过滤 is_deleted
 - **注意**：`<a>` 内不得嵌套 `<form>`（浏览器会解析弹出），医案卡片改为 div 结构
 - patients/cases 表各加 `is_deleted TINYINT(1) DEFAULT 0`
+
+### v2026.11.11-r15 三个 bug 修复
+1. **删除医案出现"未知/岁"**：新建医案的 INSERT 原先在所有 POST 上无条件执行（点删除/编辑会先插一条空"未知"医案再跳转）→ 已加 `(do ?? 'create')==='create'` 判断；清除了产生的空记录
+2. **历史就诊点击无效**：`.histitem` 没绑 onclick → 已加 `openVisit(visit_id)` 点击重新打开本次就诊
+3. **历史就诊列表恒为空**：SQL `JOIN users` 而 users 表为空（登录不走此表），内连接过滤掉全部行 → 去掉 JOIN，doctor_id 直接取 visits 表

@@ -589,7 +589,7 @@ function renderQueue() {
       <span class="st ${v.status}">${({waiting:'待诊',in_visit:'就诊中',done:'已诊'})[v.status]}</span></span></div>`).join('')
     || '<p class="hint" style="padding:10px 14px">今日暂无患者，点击「快速接诊」。</p>';
   $('histList').innerHTML = Q.history.map(v =>
-    `<div class="histitem"><b>${esc(v.name)}</b> · ${esc(v.diagnosis || '未记录诊断')}<br><span class="hint">${esc(v.finished_at)} · 医生#${v.uid}</span></div>`).join('')
+    `<div class="histitem" style="cursor:pointer" onclick="openVisit(${v.id})"><b>${esc(v.name)}</b> · ${esc(v.diagnosis || '未记录诊断')}<br><span class="hint">${esc(v.finished_at)} · 医生#${v.uid} · 点击重新打开本次就诊</span></div>`).join('')
     || '<p class="hint">无历史就诊。</p>';
 }
 
