@@ -14,7 +14,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <title>有医帮 - 接诊工作台</title>
 <link rel="stylesheet" href="assets/style.css">
 <script src="assets/speech.js"></script>
-<script src="assets/recorder.js?v=4"></script>
+<script src="assets/recorder.js?v=5"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
