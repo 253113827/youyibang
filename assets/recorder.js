@@ -152,13 +152,15 @@
         if (typeof opts.onFinal === 'function') opts.onFinal(t, fullText);
       }
       function startChunkASR() {
-        if (!asrCfg || !asrCfg.enabled || !window.MediaRecorder || !navigator.mediaDevices) return;
+        if (asrActive) return;
+        if (!asrCfg || !asrCfg.enabled) return;
+        if (!window.MediaRecorder || !navigator.mediaDevices) { say('当前浏览器不支持录音分片，请改用 Chrome'); return; }
         navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
           if (!live) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
           asrStream = s;
           try {
             mediaRec = new MediaRecorder(s);
-          } catch (e) { return; }
+          } catch (e) { say('录音分片初始化失败：' + e.message); return; }
           mediaRec.ondataavailable = function (e) {
             if (!live || !e.data || !e.data.size) return;
             if (srHadText || asrBusy) return; /* 浏览器识别已出字则不再走分片，避免重复 */
@@ -223,7 +225,7 @@
           if (code === 'network') {
             srFatal = true; /* 不再无限重启 */
             if (asrActive) say(ERRMSG.network);
-            else say('浏览器识别服务不可达，且未配置云端转写');
+            else { say('浏览器识别不可达，尝试云端分片转写…'); startChunkASR(); }
             return;
           }
           if (code === 'no-speech' || code === 'audio-capture') say(ERRMSG[code] || code);
@@ -256,8 +258,8 @@
         count(); setState('rec');
         startTimer();
         startRealWave();
-        startSR();
-        startChunkASR(); /* 与 SR 并行，SR 出字则分片自动让位 */
+        startChunkASR(); /* 先启动分片通道：WebKit 中 SR 会独占麦克风，后启动会拿不到设备 */
+        startSR();       /* SR 出字则分片自动让位（srHadText 去重） */
       };
 
       var inst = {
