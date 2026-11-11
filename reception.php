@@ -15,7 +15,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <link rel="stylesheet" href="assets/style.css?v=2">
 <script src="assets/speech.js?v=3"></script>
 <script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
-<script src="assets/recorder.js?v=9"></script>
+<script src="assets/recorder.js?v=10"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
@@ -940,13 +940,24 @@ function loadRecordings() {
   fetch(A + 'recording_list&visit_id=' + CUR.visit).then(r => r.json()).then(j => {
     if (!j.ok) { $('recList').innerHTML = '<p class="hint">' + esc(j.error || '加载失败') + '</p>'; return; }
     if (!(j.recordings || []).length) { $('recList').innerHTML = '<p class="hint">暂无录音。点上方 🎤 开始问诊录音，结束后自动归档。</p>'; return; }
-    $('recList').innerHTML = j.recordings.map(r =>
-      `<div class="aibox" style="border-bottom:1px solid #f0f0f0">
+    $('recList').innerHTML = j.recordings.map(r => {
+      let segs = [];
+      try { segs = JSON.parse(r.segments || '[]') || []; } catch (e) {}
+      const segHtml = segs.length
+        ? `<div style="margin-top:4px;border:1px dashed #dbe7f5;border-radius:4px;padding:4px 6px;max-height:180px;overflow:auto">
+             <div style="font-size:11px;color:#99a1ad;margin-bottom:2px">逐句还原（点击 ▶ 回放对应录音段；漏了可直接听录音补）：</div>
+             ${segs.map((s, i) => s.text ? `<div style="font-size:12px;line-height:1.7">
+               <a href="javascript:void(0)" onclick="playSegment('ra_${r.id}', ${+s.offset || 0})" title="回放 ${fmtSec(+s.offset || 0)} 处录音" style="text-decoration:none">▶<small>${fmtSec(+s.offset || 0)}</small></a> ${esc(s.text)}</div>` : '').join('')}
+           </div>`
+        : '';
+      return `<div class="aibox" style="border-bottom:1px solid #f0f0f0">
         <div style="font-size:12px;color:#99a1ad;margin-bottom:4px">#${r.id} · ${esc((r.created_at || '').slice(0, 16))} · ${r.duration_sec || 0}s</div>
-        <audio controls style="width:100%;height:32px" src="${esc(r.url)}"></audio>
+        <audio id="ra_${r.id}" controls style="width:100%;height:32px" src="${esc(r.url)}"></audio>
+        ${segHtml}
         <textarea id="rt_${r.id}" rows="4" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #e0e0e0;border-radius:4px;font:inherit;font-size:12px;padding:4px 6px" placeholder="逐字稿（可修正，行首标注 [医]/[患] 区分说话人）">${esc(r.transcript || '')}</textarea>
         <div style="text-align:right;margin-top:2px"><button class="btn outline sm" onclick="saveRecTranscript(${r.id})">💾 保存逐字稿</button></div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }).catch(() => { $('recList').innerHTML = '<p class="hint">加载失败</p>'; });
 }
 function saveRecTranscript(rid) {
@@ -956,7 +967,7 @@ function saveRecTranscript(rid) {
     alert(j.ok ? '逐字稿已保存' : (j.error || '保存失败'));
   });
 }
-/* 录音结束自动归档上传（由 onStop 回调触发） */
+/* 录音结束自动归档上传（由 onStop 回调触发）：整段音频 + 全文转写 + 分段（offset 秒）一起存，逐句可回放 */
 async function uploadRecording(blob, fullText) {
   if (!blob || !CUR.visit) return;
   const fd = new FormData();
@@ -967,11 +978,25 @@ async function uploadRecording(blob, fullText) {
     const r = await fetch(A + 'upload_recording', { method: 'POST', body: fd });
     const j = await r.json();
     if (j.ok) {
-      if (fullText) { const fd2 = new FormData(); fd2.append('rec_id', j.rec_id); fd2.append('transcript', fullText); await fetch(A + 'save_recording_transcript', { method: 'POST', body: fd2 }); }
+      if (fullText || (window._recSegments || []).length) {
+        const fd2 = new FormData();
+        fd2.append('rec_id', j.rec_id);
+        fd2.append('transcript', fullText || '');
+        if ((window._recSegments || []).length) fd2.append('segments', JSON.stringify(window._recSegments));
+        await fetch(A + 'save_recording_transcript', { method: 'POST', body: fd2 });
+      }
       loadRecordings();
     }
   } catch (e) {}
 }
+/* 逐句回放：点击某分段 ▶，在对应归档录音中定位到 offset 秒播放 */
+function playSegment(audioId, offset) {
+  const a = document.getElementById(audioId);
+  if (!a) return;
+  a.currentTime = Math.max(0, offset - 0.3);
+  a.play();
+}
+function fmtSec(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60); }
 
 /* ---------- 打印 / 完成 / 建患者 / 编辑患者 ---------- */
 function printOpd() {

@@ -666,7 +666,7 @@ case 'upload_recording': {
 case 'recording_list': {
     $vid = (int)($_GET['visit_id'] ?? $_POST['visit_id'] ?? 0);
     check_visit($vid);
-    $st = $pdo->prepare('SELECT id, file_path, duration_sec, transcript, created_at FROM visit_recordings WHERE visit_id = ? ORDER BY id DESC');
+    $st = $pdo->prepare('SELECT id, file_path, duration_sec, transcript, segments, created_at FROM visit_recordings WHERE visit_id = ? ORDER BY id DESC');
     $st->execute([$vid]);
     $rows = $st->fetchAll();
     foreach ($rows as &$r) { $r['url'] = $r['file_path']; unset($r['file_path']); }
@@ -681,8 +681,21 @@ case 'save_recording_transcript': {
     $st = $pdo->prepare('SELECT id FROM visit_recordings WHERE id = ?');
     $st->execute([$rid]);
     if (!$st->fetch()) fail('录音不存在', 404);
-    $st = $pdo->prepare('UPDATE visit_recordings SET transcript = ? WHERE id = ?');
-    $st->execute([$txt, $rid]);
+    /* 分段转写（逐句还原+回放）：JSON [{offset:秒,text}] */
+    $segs = $_POST['segments'] ?? '';
+    if ($segs !== '') {
+        $j = json_decode($segs, true);
+        if (is_array($j)) {
+            $clean = [];
+            foreach ($j as $s) {
+                if (!is_array($s) || !isset($s['text'])) continue;
+                $clean[] = ['offset' => (float)($s['offset'] ?? 0), 'text' => (string)$s['text']];
+            }
+            $segs = json_encode($clean, JSON_UNESCAPED_UNICODE);
+        } else $segs = '';
+    }
+    $st = $pdo->prepare('UPDATE visit_recordings SET transcript = ?, segments = ? WHERE id = ?');
+    $st->execute([$txt, $segs, $rid]);
     ok(['rec_id' => $rid]);
 }
 

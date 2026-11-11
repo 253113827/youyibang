@@ -185,6 +185,8 @@
       /* ---- 云端分片：WebAudio 采集 PCM，前端切片编码 WAV（绕开 WebKit MediaRecorder 不支持 timeslice 的缺陷） ---- */
       var asrCtx = null, asrProc = null, asrSrc = null, asrBuf = [], asrBufLen = 0, asrMuted = false;
       var CHUNK_SEC = 2, TARGET_RATE = 16000;
+      var asrSentSec = 0, asrRetryQ = [], asrRetryTimer = null;
+      /* 分段转写记录：window._recSegments = [{offset: 片起始秒, text: 转写文本}]，供逐句回放 */
       function encodeWAV(f32, rate) {
         /* 线性重采样到 16k + PCM16 WAV 封装 */
         var pcm = f32, ratio = 1;
@@ -203,7 +205,8 @@
         for (var j = 0; j < pcm.length; j++) { var x = Math.max(-1, Math.min(1, pcm[j])); v.setInt16(44 + j * 2, x < 0 ? x * 0x8000 : x * 0x7FFF, true); }
         return new Blob([buf], { type: 'audio/wav' });
       }
-      function uploadChunk(blob) {
+      function uploadChunk(blob, offset, tries) {
+        tries = tries || 0;
         asrBusy = true;
         var fd = new FormData();
         fd.append('audio', blob, 'chunk.wav');
@@ -212,16 +215,39 @@
           .then(function (j) {
             asrBusy = false;
             if (!live) return;
-            if (j && j.ok && j.text) {
-              if (srHadText) return;
-              appendFinal(j.text);
-              say('云端分片转写中…');
-            } else if (j && j.error) {
-              say('分片转写暂不可用（' + j.error + '）');
+            if (j && j.ok) {
+              if (j.text) {
+                if (!srHadText) {
+                  /* 逐句还原：记录分段 + 时间偏移（漏句时可在归档录音中点击回放） */
+                  (window._recSegments = window._recSegments || []).push({ offset: offset || 0, text: j.text });
+                  appendFinal(j.text);
+                }
+                say('云端分片转写中…');
+              } else if (j.note === 'busy' && tries < 5) {
+                /* ASR 忙（上一片还在转写）：3 秒后重发同一片，音频不丢 */
+                asrRetryQ.push({ blob: blob, offset: offset, tries: tries + 1 });
+                scheduleRetry();
+              }
+            } else {
+              say('分片转写暂不可用（' + ((j && j.error) || '') + '）');
               asrMuted = true; /* 上游持续不可用就不再反复上传 */
             }
           })
-          .catch(function () { asrBusy = false; });
+          .catch(function () {
+            /* 网络失败：重试同一片（最多 5 次），不丢音频 */
+            asrBusy = false;
+            if (live && tries < 5) { asrRetryQ.push({ blob: blob, offset: offset, tries: tries + 1 }); scheduleRetry(); }
+          });
+      }
+      function scheduleRetry() {
+        if (asrRetryTimer) return;
+        asrRetryTimer = setInterval(function () {
+          if (!live) { clearInterval(asrRetryTimer); asrRetryTimer = null; return; }
+          var it = asrRetryQ.shift();
+          if (!it) { clearInterval(asrRetryTimer); asrRetryTimer = null; return; }
+          if (!asrBusy) uploadChunk(it.blob, it.offset, it.tries);
+          else asrRetryQ.unshift(it); /* 仍忙，下轮再试 */
+        }, 3000);
       }
       function startChunkASR() {
         if (asrActive) return;
@@ -248,7 +274,9 @@
               var merged = new Float32Array(asrBufLen), off = 0;
               for (var k = 0; k < asrBuf.length; k++) { merged.set(asrBuf[k], off); off += asrBuf[k].length; }
               asrBuf = []; asrBufLen = 0;
-              uploadChunk(encodeWAV(merged, asrCtx.sampleRate));
+              var secOffset = asrSentSec;
+              asrSentSec += merged.length / asrCtx.sampleRate;
+              uploadChunk(encodeWAV(merged, asrCtx.sampleRate), secOffset, 0);
             }
           };
           asrSrc.connect(boost.input); boost.output.connect(asrProc);
@@ -341,6 +369,7 @@
         }
         live = true; fullText = ''; srHadText = false; srFatal = false; asrBusy = false;
         window._recStartAt = Date.now();
+        window._recSegments = []; asrSentSec = 0; asrRetryQ = [];
         count(); setState('rec');
         startTimer();
         startRealWave();
