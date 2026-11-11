@@ -491,7 +491,8 @@ table.rx .rowdel:hover { color:var(--danger); }
     <label class="fl">电话<input id="ep_phone"></label>
     <label class="fl">过敏史<input id="ep_al"></label>
     <div style="display:flex;gap:8px"><button class="btn primary" onclick="savePatient()">保存档案</button>
-    <button class="btn gray" onclick="document.getElementById('mEdit').classList.remove('show')">取消</button></div>
+    <button class="btn gray" onclick="document.getElementById('mEdit').classList.remove('show')">取消</button>
+    <button class="btn red" style="margin-left:auto" onclick="delPatient()">🗑 删除患者</button></div>
   </div>
 </div>
 
@@ -1199,6 +1200,21 @@ async function savePatient() {
   fd.append('age', $('ep_age').value); fd.append('phone', $('ep_phone').value); fd.append('allergy', $('ep_al').value);
   const r = await fetch(A + 'update_patient', { method: 'POST', body: fd }); const j = await r.json();
   if (j.ok) { $('mEdit').classList.remove('show'); openVisit(CUR.visit); } else alert(j.error || '失败');
+}
+async function delPatient() {
+  if (!CUR.patient) return;
+  const name = CUR.patient.name || '该患者';
+  if (!confirm('确定删除患者「' + name + '」吗？\n其历史病历、处方、录音数据将保留在数据库中，但不再显示在列表。')) return;
+  if (!confirm('再次确认：删除后如需恢复需联系管理员处理。继续删除？')) return;
+  const fd = new FormData(); fd.append('patient_id', CUR.patient.id);
+  const r = await fetch(A + 'del_patient', { method: 'POST', body: fd }); const j = await r.json();
+  if (j.ok) {
+    $('mEdit').classList.remove('show');
+    CUR.visit = null; CUR.patient = null;
+    $('recForm').style.display = 'none'; $('ptbar').textContent = '未选择患者（点底部「队列」选择患者）';
+    loadQueue();
+    alert('已删除患者「' + name + '」');
+  } else alert(j.error || '删除失败');
 }
 
 /* ---------- 语音问诊录音组件（边录边转 + 一键整理成病历） ---------- */

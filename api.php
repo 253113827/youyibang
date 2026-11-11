@@ -421,18 +421,44 @@ case 'update_patient': {
 }
 
 /* 今日队列 + 患者列表 + 历史就诊 */
+/* 删除患者（软删除：病历/处方数据保留，仅从列表隐藏） */
+case 'del_patient': {
+    $pid = (int)($_POST['patient_id'] ?? 0);
+    if ($pid <= 0) fail('缺少患者 ID');
+    $pdo->prepare('UPDATE patients SET is_deleted = 1 WHERE id = ?')->execute([$pid]);
+    ok(['deleted' => $pid]);
+}
+
+/* 医案更新（index.php 编辑） */
+case 'case_update': {
+    $cid = (int)($_POST['case_id'] ?? 0);
+    check_owner($cid);
+    $pdo->prepare('UPDATE cases SET patient_name=?, gender=?, age=?, chief_complaint=? WHERE id=?')
+        ->execute([trim($_POST['patient_name'] ?? ''), ($_POST['gender'] ?? '未知') ?: '未知',
+                   trim($_POST['age'] ?? ''), trim($_POST['chief_complaint'] ?? ''), $cid]);
+    ok(['updated' => $cid]);
+}
+
+/* 删除医案（软删除） */
+case 'case_del': {
+    $cid = (int)($_POST['case_id'] ?? 0);
+    check_owner($cid);
+    $pdo->prepare('UPDATE cases SET is_deleted = 1 WHERE id = ?')->execute([$cid]);
+    ok(['deleted' => $cid]);
+}
+
 case 'queue': {
     $uid = (int)($_SESSION['uid'] ?? 1);
     $today = $pdo->prepare("SELECT v.id, v.status, v.reg_fee, v.registered_at, v.case_id, p.id AS patient_id, p.name, p.gender, p.age, p.phone
         FROM visits v JOIN patients p ON p.id = v.patient_id
-        WHERE v.doctor_id = ? AND DATE(v.registered_at) = CURDATE()
+        WHERE v.doctor_id = ? AND DATE(v.registered_at) = CURDATE() AND p.is_deleted = 0
         ORDER BY FIELD(v.status,'waiting','in_visit','done'), v.id DESC");
     $today->execute([$uid]);
     $hist = $pdo->prepare("SELECT v.id, v.finished_at, r.diagnosis, p.name, u.id AS uid
         FROM visits v JOIN patients p ON p.id = v.patient_id
         JOIN users u ON u.id = v.doctor_id
         LEFT JOIN opd_records r ON r.visit_id = v.id
-        WHERE v.doctor_id = ? AND v.status = 'done' AND DATE(v.registered_at) < CURDATE()
+        WHERE v.doctor_id = ? AND v.status = 'done' AND DATE(v.registered_at) < CURDATE() AND p.is_deleted = 0
         ORDER BY v.finished_at DESC LIMIT 30");
     $hist->execute([$uid]);
     ok(['today' => $today->fetchAll(), 'history' => $hist->fetchAll()]);

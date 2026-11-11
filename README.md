@@ -235,3 +235,9 @@
 - **架构升级**：LLM 隧道从 Mac 迁至 M5（M5 与 jetson LLM 网关同内网直连 10.0.0.128:19170），Mac 关机**不再影响任何功能**；服务器 config.php 的 18770 端点无需改动（隧道端点不变，只是中转方变了）
 - M5 LaunchAgent 日志：`~/yyb-*.log/.err`；手工重启某服务：`launchctl kickstart -k gui/501/com.youyibang.yyb-r2t2-realtime`
 - 唯一剩余依赖：**M5 MAX 开机在线**（实时转写+精转+LLM 全在它身上）。M5 关机时：ASR 自动回退服务器 whisper base（转写可用但精度降）、整理病历/AI 提示离线（数据不丢）
+
+## v2026.11.11-r14 患者与医案管理（修改/删除）
+- **门诊患者**：编辑弹窗新增「🗑 删除患者」（双确认）；`del_patient` 软删除（is_deleted=1），病历/处方/录音数据全保留，队列/历史列表自动隐藏
+- **医案（index.php）**：每条医案卡片带 ✏️ 编辑（预填表单）/ 🗑 删除（确认）；`case_update`/`case_del` 软删除 API，列表过滤 is_deleted
+- **注意**：`<a>` 内不得嵌套 `<form>`（浏览器会解析弹出），医案卡片改为 div 结构
+- patients/cases 表各加 `is_deleted TINYINT(1) DEFAULT 0`
