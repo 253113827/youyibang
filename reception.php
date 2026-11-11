@@ -13,8 +13,9 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>有医帮 - 接诊工作台</title>
 <link rel="stylesheet" href="assets/style.css">
-<script src="assets/speech.js"></script>
-<script src="assets/recorder.js?v=5"></script>
+<script src="assets/speech.js?v=2"></script>
+<script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
+<script src="assets/recorder.js?v=6"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
@@ -291,7 +292,8 @@ table.rx .rowdel:hover { color:var(--danger); }
       <label class="fl" style="display:block;font-size:12px;color:#99a1ad">转写全文（可编辑后再整理）
         <textarea id="f_transcript" rows="3" placeholder="点击左侧麦克风开始问诊录音，转写自动填入此处" style="width:100%;border:1px solid #dbe7f5;border-radius:4px;padding:5px 8px;font:inherit;margin-top:3px;box-sizing:border-box"></textarea></label>
       <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn primary sm" onclick="organizeTranscript()">🩺 整理成病历</button>
+        <button class="btn primary sm" onclick="organizeTranscript('western')">🩺 整理成病历(西医)</button>
+        <button class="btn green sm" onclick="organizeTranscript('tcm')">🌿 整理成病历(中医)</button>
         <span id="orgNote" class="hint"></span>
       </div>
     </div>
@@ -376,11 +378,12 @@ table.rx .rowdel:hover { color:var(--danger); }
     <button data-rtab="hist" onclick="rTab(this)">患者历史</button>
   </div>
   <div id="rtab-dx">
-    <div style="display:flex;gap:6px;margin:8px 0">
-      <button class="btn primary sm" onclick="aiDx()">🤖 AI 智能诊断</button>
+    <div style="display:flex;gap:6px;margin:8px 0;align-items:center;flex-wrap:wrap">
+      <button class="btn primary sm" onclick="aiDx('western')">🤖 西医鉴别诊断</button>
+      <button class="btn green sm" onclick="aiDx('tcm')">🌿 中医辨证论治</button>
       <button class="btn outline sm" onclick="aiRxReview()">🛡 处方安全审查</button>
     </div>
-    <div class="hint" style="margin-bottom:6px">基于主诉/现病史/查体生成鉴别诊断 · 仅供参考</div>
+    <div class="hint" style="margin-bottom:6px">西医按 ICD-10 鉴别诊断；中医按证型辨证论治（含方剂出处）。内容严格依据教材/药典/指南，无出处不编造；仅供参考</div>
     <div id="aiResult"></div>
   </div>
   <div id="rtab-hist" style="display:none"><div id="ptHist">（先选择患者）</div></div>
@@ -390,7 +393,7 @@ table.rx .rowdel:hover { color:var(--danger); }
 <!-- 整理成病历预览确认弹窗 -->
 <div class="modal" id="mOrg">
   <div class="box" style="width:520px">
-    <h3>🩺 整理成病历（预览确认）</h3>
+    <h3>🩺 整理成病历（<span id="orgModeLabel">西医</span>标准 · 预览确认）</h3>
     <p class="hint">以下为 AI 整理结果，请核对编辑后确认写入（追加到对应栏，不覆盖已有内容）</p>
     <label class="fl">主诉<textarea id="org_cc" rows="2"></textarea></label>
     <label class="fl">现病史<textarea id="org_pi" rows="4"></textarea></label>
@@ -444,7 +447,8 @@ const esc = s => (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 
 /* ---------- 语音转文字：给所有文本输入区挂 🎤（不支持的环境自动隐藏） ---------- */
 function speechInit(scope) {
-  if (!window.speechSupported || !window.speechSupported()) return; // Safari iOS<14.5 等环境隐藏按钮
+  if (!window.speechSupported || !window.speechSupported()) return; // 不支持 MediaRecorder/getUserMedia 的环境隐藏按钮
+  window.YYB_ASR_URL = A + 'asr_chunk'; /* 字段级话筒走服务器 ASR 分片转写 */
   const sel = '#f_cc,#f_pi,#f_al,#f_dx,#f_notes,#f_aux,#f_trt,#pe_t,#pe_bp,#pe_hr,#qsearch';
   (scope || document).querySelectorAll(sel).forEach(el => window.attachSpeech(el));
 }
@@ -556,6 +560,7 @@ async function openVisit(vid) {
   tcmRestore(rec.tcm_checklist || null);
   renderAux(); renderTrt(); renderRx(); renderHist(j.history);
   $('aiResult').innerHTML = '<p class="hint">未运行。点击上方按钮生成鉴别诊断。</p>';
+  window._aiData = {}; window._aiHtml = {}; window._aiAdopted = {}; window._aiVisit = null;
   renderQueue();
 }
 /* 体格检查三项（体温/血压/心率）与文本互转 */
@@ -785,46 +790,63 @@ async function saveTemplate() {
   alert(j.ok ? '模板已保存' : (j.error || '保存失败'));
 }
 
-/* ---------- AI 智能诊断（伴随症状 chip 可点击写入病历） ---------- */
+/* ---------- AI 智能诊断（中西医双模式；伴随症状 chip 可点击写入病历） ---------- */
 function appendSymptom(s) {
   $('f_pi').value = ($('f_pi').value ? $('f_pi').value.replace(/[；;]?\s*$/, '；') : '') + s + '；';
   $('f_pi').dispatchEvent(new Event('change', { bubbles: true }));
   $('f_pi').focus();
 }
-async function aiDx() {
+window._aiData = {}; window._aiHtml = {}; window._aiAdopted = {};
+async function aiDx(mode = 'western') {
   if (!CUR.visit) return alert('未选择患者');
-  $('aiResult').innerHTML = '<p class="hint">AI 分析中…</p>';
-  const fd = new FormData(); fd.append('visit_id', CUR.visit);
+  /* 已有该模式结果：直接显示（换患者/重新生成时覆盖） */
+  if (window._aiHtml[mode] && window._aiMode === mode && window._aiVisit === CUR.visit) {
+    $('aiResult').innerHTML = window._aiHtml[mode];
+    return;
+  }
+  window._aiMode = mode; window._aiVisit = CUR.visit;
+  $('aiResult').innerHTML = '<p class="hint">AI 分析中（' + (mode === 'tcm' ? '中医辨证论治' : '西医鉴别诊断') + '标准，依据教材/药典/指南）…</p>';
+  const fd = new FormData(); fd.append('visit_id', CUR.visit); fd.append('mode', mode);
   const r = await fetch(A + 'ai_dx', { method: 'POST', body: fd }); const j = await r.json();
   if (!j.ok) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.error || '失败') + '</p>'; return; }
   if (!(j.differentials || []).length) { $('aiResult').innerHTML = '<p class="hint">' + esc(j.note || 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）') + '</p>'; return; }
-  window._aiData = j.differentials; window._aiAdopted = {};
-  $('aiResult').innerHTML = '<p class="hint" style="padding:4px">⚠️ 仅供参考；点「采纳」将诊断+检查+处方一键写入病历，请核对后保存</p>' + j.differentials.map((d, di) =>
-    `<div class="aibox" id="aidx_${di}"><div class="dxname">${di + 1}. ${esc(d.diagnosis)}
+  window._aiData[mode] = j.differentials; window._aiAdopted = {};
+  const rxLabel = mode === 'tcm' ? '🌿 采纳(中药方案)' : '✅ 采纳(西药方案)';
+  const rxBtnCls = mode === 'tcm' ? 'btn green sm' : 'btn primary sm';
+  const html = '<p class="hint" style="padding:4px">⚠️ 仅供参考，处方均标注出处（教材/药典/指南）；点「采纳」将诊断+检查+处方一键写入病历，请核对后保存</p>' + j.differentials.map((d, di) =>
+    `<div class="aibox" id="aidx_${mode}_${di}"><div class="dxname">${di + 1}. ${esc(d.diagnosis)}
       <span class="conf" style="background:${d.confidence === '较可能' ? '#00b578' : (d.confidence === '可能' ? '#d48806' : '#c0392b')}">${esc(d.confidence || '可能')}</span></div>
+     <div class="airow"><b>依据：</b>${esc(d.supporting || d.pathogenesis || '—')}</div>
      <div class="airow"><b>伴随：</b>${(d.associated_symptoms || []).map(s => `<span class="chip sym" onclick="appendSymptom('${esc(s)}')">＋ ${esc(s)}</span>`).join('') || '—'}</div>
-     <div class="airow"><b>查体：</b>${esc(d.physical_findings || d.supporting || '—')}</div>
+     <div class="airow"><b>查体：</b>${esc(d.physical_findings || '—')}</div>
      <div class="airow"><b>检验：</b>${(d.suggested_tests || []).map(t => `<span class="pill blue">${esc(t)}</span>`).join('') || '—'}</div>
-     ${(d.treatment_plan && (d.treatment_plan.western_rx || []).length) ? `<div class="airow"><b>方案：</b>${d.treatment_plan.western_rx.map(x => `<span class="pill">${esc(x.name)} ${esc(x.spec || '')} ${esc(x.usage || '')} ${esc(x.freq || '')} ${esc(String(x.dose || ''))}${esc(x.dose_unit || '')}×${esc(String(x.days || ''))}天</span>`).join('')}</div>` : ''}
+     ${d.formula ? `<div class="airow"><b>方剂：</b><span class="pill blue">${esc(d.formula)}</span><span class="hint">出处：${esc(d.formula_source || '方剂学教材')}</span></div>` : ''}
      ${d.against ? `<div class="airow"><b>不符点：</b>${esc(d.against)}</div>` : ''}
      ${d.red_flags ? `<div class="airow"><b>🚩 转诊指征：</b><span class="pill redf">${esc(d.red_flags)}</span></div>` : ''}
-     <div style="margin-top:6px"><b style="font-size:12px;color:#99a1ad">采纳：</b>
-       <button class="btn primary sm" onclick="adoptDx(${di},'western')">✅ 西药方案</button>
-       <button class="btn green sm" onclick="adoptDx(${di},'tcm')">🌿 中药方案</button></div></div>`).join('')
+     <div style="margin-top:6px"><button class="${rxBtnCls}" onclick="adoptDx(${di},'${mode}')">${rxLabel}</button></div></div>`).join('')
     + ((j.missing_info || []).length ? `<div class="aibox"><b style="font-size:12px">建议补充采集：</b>${j.missing_info.map(m => `<div style="font-size:12px">· ${esc(m)}</div>`).join('')}</div>` : '')
     + '<p class="ai-note">⚠️ ' + esc(j.disclaimer || 'AI 建议仅供参考，最终诊断以执业医师判断为准。') + '</p>';
+  window._aiHtml[mode] = html;
+  $('aiResult').innerHTML = html;
 }
 /* 采纳 AI 诊断：诊断名→诊断栏；查体→体格检查；建议检验→辅助检查；
    处方按 type 生成（western=西药标准 / tcm=中药饮片标准）→ 对应处方签；注意事项→注意事项 */
 async function adoptDx(di, type = 'western') {
   if (!CUR.visit) return alert('未选择患者');
-  const d = (window._aiData || [])[di];
+  const d = ((window._aiData || {})[type] || [])[di];
   if (!d) return;
-  const key = di + '_' + type;
+  const key = type + '_' + di;
   if (window._aiAdopted && window._aiAdopted[key]) return alert('该诊断的' + (type === 'tcm' ? '中药' : '西药') + '方案已采纳过');
   /* 诊断名：去掉 ICD-10 编码括号 */
   const dxName = (d.diagnosis || '').replace(/[（(][A-Z]\d{2}[^）)]*[）)]/g, '').trim() || (d.diagnosis || '').trim();
-  const btn = document.querySelector(`#aidx_${di} ${type === 'tcm' ? '.btn.green.sm' : '.btn.primary.sm'}`);
+  const btn = document.querySelector(`#aidx_${type}_${di} .btn`);
+  /* 需求1：处方签已有 AI 生成的药行时，询问清空重写还是追加 */
+  const sheet = window['_rx_' + (type === 'tcm' ? 'chinese' : 'western')] || [];
+  const hasAI = sheet.some(x => x._ai);
+  let clearAI = false;
+  if (hasAI) {
+    clearAI = confirm('该处方签中已有 AI 生成的药' + (type === 'tcm' ? '味' : '品') + '。\n【确定】清空原有 AI 药行后写入新方案\n【取消】保留原方案，新方案追加在后面');
+  }
   if (btn) { btn.textContent = '⏳ 正在生成' + (type === 'tcm' ? '中药' : '西药') + '方案…'; btn.disabled = true; }
   let tp = null, err = '';
   try {
@@ -844,20 +866,24 @@ async function adoptDx(di, type = 'western') {
     (window._aux = window._aux || []).push({ name: String(t), price: 0, times: 1 });
   });
   let rxCount = 0, extra = '';
+  const aiTag = { _ai: true };
   if (tp && type === 'tcm' && (tp.chinese_rx || []).length) {
     _openSheets.chinese = true;
+    if (clearAI) window._rx_chinese = (window._rx_chinese || []).filter(x => !x._ai);
     (window._rx_chinese = window._rx_chinese || []);
     if (tp.formula) { appendField('f_dx', '（中医方剂：' + tp.formula + '）'); extra = '，方剂：' + tp.formula; }
     tp.chinese_rx.forEach(x => {
       window._rx_chinese.push({
         drug_id: null, name: String(x.name || ''), qty: String(x.qty_g ?? ''), qty_unit: 'g',
-        prep: String(x.prep || ''), decoct: String(x.decoct || ''), price: 0, note: String(x.note || '')
+        prep: String(x.prep || ''), decoct: String(x.decoct || ''), price: 0, note: String(x.note || ''),
+        source: String(x.source || ''), _ai: true
       });
       rxCount++;
     });
   }
   if (tp && type === 'western' && (tp.western_rx || []).length) {
     _openSheets.western = true;
+    if (clearAI) window._rx_western = (window._rx_western || []).filter(x => !x._ai);
     (window._rx_western = window._rx_western || []);
     tp.western_rx.forEach(x => {
       window._rx_western.push({
@@ -866,7 +892,7 @@ async function adoptDx(di, type = 'western') {
         dose: String(x.dose ?? ''), dose_unit: DOSE_UNITS.includes(x.dose_unit) ? x.dose_unit : '片',
         days: String(x.days ?? 3), qty: String(x.qty ?? 1),
         qty_unit: (QTY_UNITS.western.includes(x.qty_unit) ? x.qty_unit : '盒'),
-        price: 0, note: String(x.note || '')
+        price: 0, note: String(x.note || ''), source: String(x.source || ''), _ai: true
       });
       rxCount++;
     });
@@ -961,20 +987,22 @@ function recorderInit() {
 }
 
 /* 整理成病历：调 act=organize_transcript，成功弹预览确认框；离线兜底插原始转写 */
-async function organizeTranscript() {
+async function organizeTranscript(mode = 'western') {
   const transcript = $('f_transcript').value.trim();
   if (!transcript) return alert('请先录音或输入转写内容');
   if (!CUR.visit) return alert('未选择患者');
-  $('orgNote').textContent = 'AI 整理中…';
+  $('orgNote').textContent = 'AI 整理中（' + (mode === 'tcm' ? '中医' : '西医') + '标准）…';
   const fd = new FormData();
   fd.append('transcript', transcript);
   fd.append('visit_id', CUR.visit);
+  fd.append('mode', mode);
   const r = await fetch(A + 'organize_transcript', { method: 'POST', body: fd });
   const j = await r.json();
   if (j.ok) {
     $('org_cc').value = j.chief_complaint || '';
     $('org_pi').value = j.present_illness || '';
     $('org_tcm').value = j.tcm_summary || '';
+    document.getElementById('orgModeLabel').textContent = (mode === 'tcm' ? '中医' : '西医');
     $('orgNote').textContent = '';
     $('mOrg').classList.add('show');
   } else if (j.raw !== undefined) {

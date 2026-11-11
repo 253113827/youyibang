@@ -531,35 +531,47 @@ case 'search_proc': {
 case 'ai_dx': {
     $vid = (int)($_POST['visit_id'] ?? 0);
     check_visit($vid);
+    $mode = ($_POST['mode'] ?? 'western') === 'tcm' ? 'tcm' : 'western';
     $st = $pdo->prepare('SELECT p.name, p.gender, p.age, r.chief_complaint, r.present_illness, r.physical_exam, r.allergy_history, r.diagnosis
         FROM visits v JOIN patients p ON p.id = v.patient_id LEFT JOIN opd_records r ON r.visit_id = v.id WHERE v.id = ?');
     $st->execute([$vid]);
     $c = $st->fetch();
-    $prompt = <<<P
-# 角色
-你是一名经验丰富的全科临床顾问，为基层诊所医生提供鉴别诊断参考。你的输出仅供参考，不构成诊断或医疗建议，最终诊疗决策由接诊医生做出。
-
-# 输入
-【主诉】{$c['chief_complaint']}
-【现病史】{$c['present_illness']}
-【体格检查】{$c['physical_exam']}
-【既往史/过敏史】{$c['allergy_history']}
-【年龄】{$c['age']} 【性别】{$c['gender']}
-
-# 任务
-基于以上信息，给出 3-5 个鉴别诊断，按可能性从高到低排列。
+    $baseInfo = "【主诉】{$c['chief_complaint']}\n【现病史】{$c['present_illness']}\n【体格检查】{$c['physical_exam']}\n【既往史/过敏史】{$c['allergy_history']}\n【年龄】{$c['age']} 【性别】{$c['gender']}";
+    if ($mode === 'tcm') {
+        $task = <<<T
+# 任务（中医辨证论治模式）
+基于以上信息进行中医辨证：给出 3-5 个可能证型，按可能性从高到低排列。处方必须依据经典方剂（《方剂学》新世纪教材、《伤寒论》《金匮要略》等经典），证型判断依据《中医诊断学》《中医内科学》教材，并在字段中标注出处。严禁编造方剂、药物与出处。
 
 # 输出要求（严格 JSON）
-{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）"}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
+{"differentials":[{"diagnosis":"证型名（如：肝郁脾虚证）","supporting":"辨证依据（含舌脉要点）","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关望闻切诊所见","suggested_tests":["建议检查1"],"confidence":"较可能/可能/需警惕但不能除外","red_flags":"须立即转诊的情况（可空）","formula":"推荐方剂名（如：逍遥散合四君子汤加减）","formula_source":"方剂出处（如：《方剂学》新世纪第5版／《伤寒论》）"}],"missing_info":["建议补充四诊信息"],"disclaimer":"本结果由 AI 依据教材与经典生成，仅供临床参考，不构成诊断或医疗建议，请以执业中医师面诊判断为准。"}
+T;
+    } else {
+        $task = <<<T
+# 任务（西医鉴别诊断模式）
+基于以上信息，给出 3-5 个鉴别诊断，按可能性从高到低排列。诊断附 ICD-10 编码；治疗方案须依据《内科学》人卫版教材、相关临床诊疗指南、《中国药典》，并在 note 中标注出处；严禁编造药物与出处。
+
+# 输出要求（严格 JSON）
+{"differentials":[{"diagnosis":"诊断名称（规范中文病名，附 ICD-10 编码）","supporting":"诊断依据","against":"不符点（可空）","associated_symptoms":["伴随症状1","伴随症状2"],"physical_findings":"相关查体所见","suggested_tests":["建议检查1","建议检查2"],"confidence":"较可能/可能/需警惕但不能除外（禁止数字概率）","red_flags":"须立即转诊的情况（可空）"}],"missing_info":["建议补充采集的信息"],"disclaimer":"本结果由 AI 依据教材与指南生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。"}
+T;
+    }
+    $modeLabel = $mode === 'tcm' ? '中医' : '西医';
+    $prompt = <<<P
+# 角色
+你是一名经验丰富的全科临床顾问（{$modeLabel}视角），为基层诊所医生提供诊疗参考。你的输出仅供参考，不构成诊断或医疗建议，最终诊疗决策由接诊医生做出。所有医学内容必须有明确依据（教材/经典/药典/指南），严禁编造。
+
+# 输入
+{$baseInfo}
+
+{$task}
 
 # 规则
 1. 只依据输入信息推理，不得虚构；信息不足写进 missing_info。
-2. 必须包含至少一条"需警惕但不能除外"的严重可治疾病。
+2. 必须包含至少一条"需警惕但不能除外"的严重可治疾病（或急危重证型）。
 3. 涉及急危重指征时在 red_flags 写出转诊建议。
-4. associated_symptoms 为该诊断常见伴随症状词组（每条 2-6 字），供医生点击快捷写入病历。
+4. associated_symptoms 为常见伴随症状词组（每条 2-6 字），供医生点击快捷写入病历。
 5. 只输出 JSON 本体，不要 markdown 代码块包裹。disclaimer 字段原样保留。
 P;
-    $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
+    $r = llm_chat([['role' => 'user', 'content' => $prompt]], 150);
     if ($r === null) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 服务暂不可用（上游模型离线中，数据已保留；恢复后功能自动生效）']);
     $s = strpos($r, '{'); $e = strrpos($r, '}');
     $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
@@ -582,7 +594,7 @@ case 'ai_treatment': {
     if ($type === 'tcm') {
         $prompt = <<<P
 # 角色
-你是一名中医师，为下述诊断拟定【中药饮片处方模板】（辨证参考主诉症状），供接诊医师采纳后核对加减。输出仅供参考。
+你是一名中医师，为下述诊断拟定【中药饮片处方模板】（辨证参考主诉症状），供接诊医师采纳后核对加减。输出仅供参考。处方必须出自经典方剂或《中医内科学》《方剂学》教材、《中国药典》2020版，严禁编造药味与剂量。
 
 # 患者
 【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
@@ -591,16 +603,17 @@ case 'ai_treatment': {
 {$dx}
 
 # 输出要求（严格 JSON，只输出 JSON 本体不要代码块）
-{"chinese_rx":[{"name":"饮片名","qty_g":10,"prep":"炮制（可空，如清炒/蜜炙）","decoct":"特殊煎法（可空，如先煎/后下/包煎）","note":"配伍用意（可空）"}],"formula":"推荐方剂名（如：龙胆泻肝汤加减）","aux_tests":[{"name":"检查项目名","times":1}],"notes":"医嘱：忌口/煎服法等"}
+{"chinese_rx":[{"name":"饮片名","qty_g":10,"prep":"炮制（可空，如清炒/蜜炙）","decoct":"特殊煎法（可空，如先煎/后下/包煎）","note":"配伍用意","source":"出处（如：《方剂学》逍遥散／《中国药典》2020版）"}],"formula":"推荐方剂名（如：龙胆泻肝汤加减）","formula_source":"方剂出处（如：《方剂学》新世纪第5版／《太平惠民和剂局方》）","aux_tests":[{"name":"检查项目名","times":1}],"notes":"医嘱：忌口/煎服法等"}
 
 # 规则
-1. 6-12 味饮片，剂量以克为单位符合药典常规；十八反十九畏禁忌；与过敏史冲突时换药并在 note 说明。
-2. aux_tests 为建议的辅助检查（0-3 项）。
+1. 6-12 味饮片，剂量以克为单位符合《中国药典》2020版常规用量；严守十八反十九畏；与过敏史冲突时换药并在 note 说明。
+2. 每味药 source 标注出处；formula 与 formula_source 必填。
+3. aux_tests 为建议的辅助检查（0-3 项）。
 P;
     } else {
         $prompt = <<<P
 # 角色
-你是一名基层诊所全科医生，为下述诊断制定【成人常规西医治疗方案模板】，供接诊医生采纳后核对修改。输出仅供参考。
+你是一名基层诊所全科医生，为下述诊断制定【成人常规西医治疗方案模板】，供接诊医生采纳后核对修改。输出仅供参考。药物必须依据《内科学》人卫版教材、相关临床诊疗指南、《中国药典》2020版，严禁编造。
 
 # 患者
 【年龄】{$c['age']} 【性别】{$c['gender']} 【过敏史】{$c['allergy_history']}
@@ -609,11 +622,12 @@ P;
 {$dx}
 
 # 输出要求（严格 JSON，只输出 JSON 本体不要代码块）
-{"western_rx":[{"name":"通用药名","spec":"常见规格","usage":"口服","freq":"bid","dose":"1","dose_unit":"片","days":3,"qty":1,"qty_unit":"盒","note":"用药交代（可空）"}],"aux_tests":[{"name":"检查项目名","times":1}],"notes":"注意事项，与过敏史冲突时在此提示"}
+{"western_rx":[{"name":"通用药名","spec":"常见规格","usage":"口服","freq":"bid","dose":"1","dose_unit":"片","days":3,"qty":1,"qty_unit":"盒","note":"用药交代（可空）","source":"出处（如：《内科学》人卫第10版／相关指南名）"}],"aux_tests":[{"name":"检查项目名","times":1}],"notes":"注意事项，与过敏史冲突时在此提示"}
 
 # 规则
 1. 2-4 种常用药物，剂量符合成人常规；与过敏史冲突时换药并在 note 说明。
-2. aux_tests 为该诊断建议的辅助检查（0-3 项）。
+2. 每药 source 标注出处。
+3. aux_tests 为该诊断建议的辅助检查（0-3 项）。
 P;
     }
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
@@ -626,7 +640,7 @@ P;
             'aux_tests' => (array)($j['aux_tests'] ?? []), 'notes' => (string)($j['notes'] ?? ''), 'type' => 'tcm']);
     }
     ok(['western_rx' => (array)($j['western_rx'] ?? []), 'aux_tests' => (array)($j['aux_tests'] ?? []),
-        'notes' => (string)($j['notes'] ?? '')]);
+        'notes' => (string)($j['notes'] ?? ''), 'type' => 'western']);
 }
 
 /* 处方安全审查：规则引擎（rules.php 配对表+过敏交叉）优先，AI 补充；warnings 带 source 字段 */
@@ -871,13 +885,20 @@ case 'organize_transcript': {
     if ($cid) check_owner($cid);
     $target = trim($_POST['target'] ?? ''); /* 可选侧重：主诉/现病史 */
     $targetNote = $target !== '' ? "\n本次整理侧重点：【{$target}】，其余部分仍需完整输出。" : '';
+    $mode = ($_POST['mode'] ?? 'western') === 'tcm' ? 'tcm' : 'western';
+    if ($mode === 'tcm') {
+        $stdRule = "2. 按中医病历规范（参照《中医病历书写基本规范》）整理：【主诉】【现病史】【四诊摘要】三段结构，四诊摘要须含望闻问切所得（舌象、脉象等，未提及标注\"未提及\"）；语言使用规范中医术语（如\"胃脘胀满\"而非\"肚子胀\"）；";
+    } else {
+        $stdRule = "2. 按西医病历规范（《病历书写基本规范》）整理：【主诉】【现病史】【体格检查要点】三段结构；语言使用规范西医术语；";
+    }
+    $modeLabel2 = $mode === 'tcm' ? '中医' : '西医';
     $prompt = <<<P
-你是中医门诊病历整理助手。下面是一段医患问诊的口语转写，请整理为规范病历文本：
+你是门诊病历整理助手（{$modeLabel2}标准）。下面是一段医患问诊的口语转写，请整理为规范病历文本：
 1. 去除语气词（嗯、啊、呃）、重复、寒暄与无关内容；
-2. 按【主诉】【现病史】【四诊摘要】三段结构输出，某段信息缺失时标注"未提及"；
-3. 保留所有医学信息，不得编造、不得遗漏症状/病程/诱因/伴随症/舌脉等；
+{$stdRule}
+3. 保留所有医学信息，不得编造、不得遗漏症状/病程/诱因/伴随症/舌脉等；医学表述须符合教材规范；
 4. 末尾固定加一行："本整理由 AI 生成，请医生核对"。{$targetNote}
-5. 只输出严格 JSON，不要任何解释文字：{"chief_complaint":"主诉文本","present_illness":"现病史文本","tcm_summary":"四诊摘要文本"}
+5. 只输出严格 JSON，不要任何解释文字：{"chief_complaint":"主诉文本","present_illness":"现病史文本","tcm_summary":"四诊摘要/体格检查要点文本"}
 
 # 口语转写
 {$transcript}
