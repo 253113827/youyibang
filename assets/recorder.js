@@ -218,7 +218,7 @@
           if (typeof opts.onInterim === 'function') opts.onInterim(interim);
         };
         rec.onend = function () {
-          if (want && !srFatal) { setTimeout(function () { try { rec.start(); } catch (e) { hardStop(); } }, 250); }
+          if (want && !srFatal) { setTimeout(function () { try { rec.start(); } catch (e) { stopSR(); } }, 250); }
         };
         rec.onerror = function (ev) {
           var code = ev && ev.error;
