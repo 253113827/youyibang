@@ -530,40 +530,49 @@ case 'appt_doctors': {
     ok(['doctors' => $cfg]);
 }
 case 'appt_slots_view': {
-    /* 返回某医生某日某时段的 30 分钟格子及占用情况 */
+    /* 按医生星期出诊表生成 30 分钟格子（含容量/占用/预留） */
     $doctor = trim($_POST['doctor'] ?? $_GET['doctor'] ?? '');
     $date = trim($_POST['date'] ?? $_GET['date'] ?? '');
-    $period = ($_POST['period'] ?? $_GET['period'] ?? '上午') === '下午' ? '下午' : '上午';
     $phone = trim($_POST['phone'] ?? '');
     if (!$doctor || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('参数错误');
     $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
     $doc = null;
     foreach ($cfg as $d0) if (($d0['name'] ?? '') === $doctor) { $doc = $d0; break; }
     if (!$doc) fail('医生不存在');
-    $range = $doc[$period === '上午' ? 'am' : 'pm'] ?? '';
-    if (!preg_match("/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/", $range, $m)) fail('该医生未配置' . $period . '门诊');
-    $start = ((int)$m[1]) * 60 + (int)$m[2];
-    $end = ((int)$m[3]) * 60 + (int)$m[4];
-    $slots = [];
-    for ($t = $start; $t < $end; $t += 30) {
-        $slots[] = sprintf('%02d:%02d', intdiv($t, 60), $t % 60);
-    }
-    $st = $pdo->prepare("SELECT time_slot, name, phone FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
-    $st->execute([$doctor, $date, $period]);
-    $taken = [];
-    foreach ($st->fetchAll() as $r) {
-        if (!$r['time_slot']) continue;
-        $taken[$r['time_slot']] = ($phone !== '' && $r['phone'] === $phone);
-    }
-    /* 预留号：每时段末尾 reserve_count 个格子仅医生端可分配（现场/电话/复诊录入） */
+    $wd = (int)date('w', strtotime($date));
+    $daySessions = $doc['week'][(string)$wd] ?? [];
+    if (!$daySessions) { ok(['slots' => [], 'sessions' => [], 'noweek' => true, 'wd' => $wd]); }
     $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
-    $total = count($slots);
-    ok(['slots' => array_map(function ($s, $idx) use ($taken, $total, $reserve) {
-            $isReserved = $reserve > 0 && $idx >= $total - $reserve;
-            return ['slot' => $s, 'taken' => (bool)($taken[$s] ?? false), 'reserved' => $isReserved];
-        }, $slots, array_keys($slots)),
-        'reserve' => $reserve,
-        'past' => ($date === date('Y-m-d') && (($period === '上午' && date('H') >= 11) || ($period === '下午' && date('H') >= 17)))]);
+    $qAll = $pdo->prepare("SELECT time_period, time_slot, name, phone FROM appointments WHERE doctor=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
+    $qAll->execute([$doctor, $date]);
+    $rowsAll = $qAll->fetchAll();
+    $out = []; $sessions = [];
+    foreach ($daySessions as $ses) {
+        $period = $ses['p'];
+        $cap = max(1, (int)($ses['cap'] ?? 15));
+        $s0 = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
+        $s1 = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2);
+        $nSlots = max(1, intdiv($s1 - $s0, 30));
+        $perSlot = intdiv($cap, $nSlots); $extra = $cap % $nSlots;
+        $booked = 0;
+        foreach ($rowsAll as $r0) if ($r0['time_period'] === $period) $booked++;
+        $sessions[] = ['period' => $period, 'start' => $ses['s'], 'end' => $ses['e'], 'cap' => $cap, 'booked' => $booked];
+        $idx = 0;
+        for ($t = $s0; $t < $s1; $t += 30, $idx++) {
+            $slot = sprintf('%02d:%02d', intdiv($t, 60), $t % 60);
+            $capacity = $perSlot + ($idx < $extra ? 1 : 0);
+            $usedCnt = 0; $mine = false;
+            foreach ($rowsAll as $r1) {
+                if ($r1['time_period'] === $period && $r1['time_slot'] === $slot) {
+                    $usedCnt++;
+                    if ($phone !== '' && $r1['phone'] === $phone) $mine = true;
+                }
+            }
+            $isReserved = $reserve > 0 && $idx >= $nSlots - $reserve;
+            $out[] = ['period' => $period, 'slot' => $slot, 'taken' => $usedCnt, 'capacity' => $capacity, 'full' => $usedCnt >= $capacity, 'reserved' => $isReserved, 'mine' => $mine];
+        }
+    }
+    ok(['slots' => $out, 'sessions' => $sessions, 'wd' => $wd, 'reserve' => $reserve]);
 }
 case 'appt_book': {
     $name = trim($_POST['name'] ?? '');
@@ -571,7 +580,7 @@ case 'appt_book': {
     $idc = preg_replace('/\s+/', '', trim($_POST['id_card'] ?? ''));
     $doctor = trim($_POST['doctor'] ?? '');
     $date = trim($_POST['date'] ?? '');
-    $period = ($_POST['period'] ?? '上午') === '下午' ? '下午' : '上午';
+    $period = trim($_POST['period'] ?? '上午');
     $slot = trim($_POST['time_slot'] ?? '');
     if ($name === '' || $phone === '') fail('请填写姓名和电话');
     if (strlen($idc) < 15) fail('请填写正确的身份证号');
@@ -579,36 +588,40 @@ case 'appt_book': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('日期格式错误');
     if ($date < date('Y-m-d') || $date > date('Y-m-d', strtotime('+14 days'))) fail('仅可预约今明起 14 天内');
     if ($date === date('Y-m-d') && $slot <= date('H:i')) fail('该时间段已过，请选择更晚的时间');
-    /* 格子合法性：slot 必须在该医生该时段内 */
     $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
     $doc = null;
     foreach ($cfg as $d0) if (($d0['name'] ?? '') === $doctor) { $doc = $d0; break; }
     if (!$doc) fail('医生不存在');
-    $range = $doc[$period === '上午' ? 'am' : 'pm'] ?? '';
-    if (!preg_match("/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/", $range, $m) || $slot < sprintf('%02d:%02d', $m[1], $m[2]) || $slot > sprintf('%02d:%02d', $m[3], $m[4]) || $slot === sprintf('%02d:%02d', $m[3], $m[4])) fail('所选时间不在该医生门诊时段内');
-    /* 格子未被占 */
-    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
-    $st->execute([$doctor, $date, $period, $slot]);
-    if ((int)$st->fetchColumn()) fail('该时间段刚被约满，请刷新后选择其他时间');
-    /* 预留号不可由患者自约（仅医生端录入现场/电话/复诊患者使用） */
-    $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
+    $wd = (int)date('w', strtotime($date));
+    $daySessions = $doc['week'][(string)$wd] ?? [];
+    if (!$daySessions) { $wcn = ['日','一','二','三','四','五','六'][$wd]; fail('施宣赫医生周' . $wcn . '无门诊（出诊：周五下午/晚上、周日全天），请选择出诊日期'); }
+    $ses = null;
+    foreach ($daySessions as $s0) if (($s0['p'] ?? '') === $period) { $ses = $s0; break; }
+    if (!$ses) fail('请选择该医生当日的门诊时段');
+    $cap = max(1, (int)($ses['cap'] ?? 15));
+    if ($slot < $ses['s'] || $slot >= $ses['e']) fail('所选时间不在 ' . $ses['s'] . '-' . $ses['e'] . ' 内');
+    /* 该时段总容量校验 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period]);
-    $bookedNow = (int)$st->fetchColumn();
-    $cfg2 = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
-    foreach ($cfg2 as $d1) if (($d1['name'] ?? '') === $doctor) {
-        $rg = $d1[$period === '上午' ? 'am' : 'pm'] ?? '';
-        if (preg_match("/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/", $rg, $mm)) {
-            $totalSlots = intdiv(((int)$mm[3]) * 60 + (int)$mm[4] - (((int)$mm[1]) * 60 + (int)$mm[2]), 30);
-            if ($reserve > 0 && $bookedNow >= $totalSlots - $reserve) fail('该时段普通号已约满（剩余为预留号），请选其他时段或到店挂号');
-        }
-        break;
+    if ((int)$st->fetchColumn() >= $cap) fail($period . '号已约满（共 ' . $cap . ' 个），请选择其他时段');
+    /* 该格子容量校验 */
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period, $slot]);
+    $nSlots = max(1, intdiv(((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2)), 30));
+    $perSlotCap = intdiv($cap, $nSlots) + 1; /* 容量上限取上限值 */
+    if ((int)$st->fetchColumn() >= $perSlotCap) fail('该时间段已约满，请选择相邻时间');
+    /* 预留号患者不可自约 */
+    $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
+    if ($reserve > 0) {
+        $s0min = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
+        $idx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - $s0min, 30);
+        if ($idx >= $nSlots - $reserve) fail('该时间为预留号（到店挂号/电话预约可用），请选择其他时间');
     }
     /* 同人同日去重 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$name, $phone, $date]);
     if ((int)$st->fetchColumn()) fail('您当天已有预约，请先取消后再改约');
-    /* 排号：同医生同日同时段有效预约数+1 */
+    /* 排号 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period]);
     $queue = (int)$st->fetchColumn() + 1;
