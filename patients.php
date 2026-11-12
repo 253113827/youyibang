@@ -12,6 +12,12 @@ header('Content-Type: text/html; charset=utf-8');
 <title>患者管理 - 福俭堂国医馆</title>
 <link rel="stylesheet" href="assets/style.css">
 <style>
+.navbar{display:flex;gap:4px;align-items:center;background:#1f6f43;color:#fff;padding:0 12px;height:44px}
+.navbar .logo{font-weight:700;margin-right:14px}
+.navbar a,.navbar span.mod{color:#d6efe0;text-decoration:none;padding:6px 10px;border-radius:6px;font-size:13px}
+.navbar a.act{background:#2e9159;color:#fff}
+.navbar .mod{opacity:.45;cursor:not-allowed}
+.navbar .right{margin-left:auto}
 body { background:#f5f6f7; }
 .pwrap { max-width:1100px; margin:0 auto; padding:14px; }
 .ptop { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }

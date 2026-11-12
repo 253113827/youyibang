@@ -14,6 +14,7 @@ header('Content-Type: text/html; charset=utf-8');
 body { font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; background:var(--bg); color:var(--txt); min-height:100vh; }
 .wrap { max-width:480px; margin:0 auto; padding:16px 14px 40px; }
 header { text-align:center; padding:22px 0 14px; }
+header a { display:inline-block; }
 header .logo { display:inline-block; background:var(--primary); color:#fff; font-weight:800; padding:8px 18px; border-radius:10px; font-size:18px; letter-spacing:2px; }
 header p { color:var(--sub); font-size:12px; margin-top:8px; }
 .card { background:var(--card); border-radius:12px; padding:18px 16px; box-shadow:0 1px 4px rgba(0,0,0,.05); margin-bottom:14px; }
@@ -40,8 +41,9 @@ button:disabled { opacity:.6; }
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">福俭堂国医馆</div>
+    <a href="index.php" style="text-decoration:none"><div class="logo">福俭堂国医馆</div></a>
     <p>就诊记录自助查询 · 仅显示最近 7 日</p>
+    <a href="index.php" style="font-size:12px;color:#00b578;text-decoration:none">← 返回有医帮首页</a>
   </header>
 
   <div class="card" id="formCard">
@@ -116,6 +118,7 @@ function render(name, visits) {
   }
   html += '<div class="card" style="text-align:center;font-size:11px;color:#99a1ad">免责声明：本内容由有医帮AI系统辅助生成，仅供参考，不构成诊疗指令，请以医生签字确认为准。</div>';
   html += '<button onclick="location.reload()">返回重新查询</button>';
+  html += '<p style="text-align:center;margin-top:10px"><a href="index.php" style="font-size:12px;color:#00b578;text-decoration:none">← 返回有医帮首页</a></p>';
   box.innerHTML = html;
   window.scrollTo(0, 0);
 }
