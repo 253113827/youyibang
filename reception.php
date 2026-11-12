@@ -352,13 +352,12 @@ table.rx .rowdel:hover { color:var(--danger); }
     <span>舌质</span><input id="in_tb" placeholder="淡红/红绛/淡白/紫暗" style="width:110px">
     <span>舌苔</span><input id="in_tc" placeholder="薄白/黄腻/白腻/少苔" style="width:110px">
   </div></div></div>
-  <div class="frow2"><div class="flabel">检验报告<small style="color:#bbb">（拍照上传+AI 分析）</small></div><div class="fval">
+  <div class="frow2"><div class="flabel">检验报告<small style="color:#bbb">（拍照/上传+AI 分析）</small></div><div class="fval">
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <select id="lab_type" style="border:1px solid #e8d99a;background:#fff;border-radius:3px;padding:2px 6px;font:inherit">
         <option>化验单</option><option>面色</option><option>舌苔</option><option>其他</option>
       </select>
-      <input type="file" id="lab_files" accept="image/*" multiple style="font-size:12px;max-width:200px">
-      <button class="btn outline-blue sm" onclick="labUpload()">📤 上传</button>
+      <label class="filebtn" style="background:var(--primary);border-radius:4px;padding:5px 10px;font-size:12px">📷 拍照/上传<input type="file" id="lab_files" accept="image/*" capture="environment" multiple hidden onchange="labUpload(this)"></label>
     </div>
     <div id="labList" style="margin-top:6px"></div>
   </div></div>
@@ -1097,31 +1096,52 @@ async function uploadRecording(blob, fullText) {
   return null;
 }
 /* ===== 检验报告：上传/AI 分析/删除 ===== */
-async function labUpload() {
+async function labUpload(input) {
   if (!CUR.visit) return alert('未选择患者');
-  const files = document.getElementById('lab_files').files;
-  if (!files.length) return alert('请先选择图片');
+  const files = input.files;
+  if (!files.length) return;
   const fd = new FormData();
   fd.append('visit_id', CUR.visit);
   fd.append('type', document.getElementById('lab_type').value);
   for (const f of files) fd.append('files[]', f);
+  input.value = '';
   $('orgNote').textContent = '检验报告上传中…';
   const r = await fetch(A + 'visit_upload', { method: 'POST', body: fd }); const j = await r.json();
-  if (j.ok) { $('lab_files').value = ''; loadLabImages(); $('orgNote').textContent = '检验报告已上传，点「AI 分析」识别'; }
-  else alert(j.error || '上传失败');
+  if (j.ok) {
+    (j.images || []).forEach(x => labInsertCard(x)); /* 立即显示，不用整列表刷新 */
+    $('orgNote').textContent = '检验报告已上传，点「AI 分析」识别（完成后🔔提醒）';
+  } else alert(j.error || '上传失败');
+}
+function labInsertCard(x) {
+  const hint = document.querySelector('#labList .hint');
+  if (hint) hint.remove();
+  const d = document.createElement('div');
+  d.id = 'labcard_' + x.id;
+  d.style.cssText = 'display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed #f0e6c8;flex-wrap:wrap';
+  d.innerHTML = `<a href="${esc(x.path)}" target="_blank" style="flex:none"><img loading="lazy" src="${esc(x.path)}" style="width:64px;height:64px;object-fit:cover;border-radius:4px"></a>
+    <div style="flex:1;min-width:180px">
+      <div style="font-size:12px;color:#8a6d1a">${esc(x.type || '化验单')} · 刚上传
+        <button class="btn outline-blue sm" onclick="labAI(${x.id})">🤖 AI 分析</button>
+        <button class="btn gray sm" onclick="labDel(${x.id})">🗑</button></div>
+      <div id="labai_${x.id}" style="font-size:12px;color:#555;white-space:pre-wrap;margin-top:3px"></div>
+    </div>`;
+  document.getElementById('labList').prepend(d);
 }
 async function loadLabImages() {
   if (!CUR.visit) return;
   const r = await fetch(A + 'visit_images&visit_id=' + CUR.visit); const j = await r.json();
   if (!j.ok) return;
-  $('labList').innerHTML = (j.images || []).map(x => `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed #f0e6c8;flex-wrap:wrap">
-    <a href="${esc(x.path)}" target="_blank" style="flex:none"><img src="${esc(x.path)}" style="width:64px;height:64px;object-fit:cover;border-radius:4px"></a>
+  $('labList').innerHTML = (j.images || []).map(x => labCardHtml(x)).join('') || '<p class="hint">暂无检验报告图片，点上方「📷 拍照/上传」。</p>';
+}
+function labCardHtml(x) {
+  return `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed #f0e6c8;flex-wrap:wrap">
+    <a href="${esc(x.path)}" target="_blank" style="flex:none"><img loading="lazy" src="${esc(x.path)}" style="width:64px;height:64px;object-fit:cover;border-radius:4px"></a>
     <div style="flex:1;min-width:180px">
       <div style="font-size:12px;color:#8a6d1a">${esc(x.type)} · ${esc((x.created_at||'').slice(5,16))}
         <button class="btn outline-blue sm" onclick="labAI(${x.id})">🤖 AI 分析</button>
         <button class="btn gray sm" onclick="labDel(${x.id})">🗑</button></div>
       <div id="labai_${x.id}" style="font-size:12px;color:#555;white-space:pre-wrap;margin-top:3px">${x.ai_result ? esc(x.ai_result).slice(0, 500) : ''}</div>
-    </div></div>`).join('') || '<p class="hint">暂无检验报告图片，拍照或选择文件后上传。</p>';
+    </div></div>`;
 }
 async function labAI(id) {
   const el = document.getElementById('labai_' + id);
