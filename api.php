@@ -567,6 +567,9 @@ case 'ai_dx': {
     $pe = trim($_POST['pe'] ?? '') ?: (string)($c['physical_exam'] ?? '');
     $al = trim($_POST['al'] ?? '') ?: (string)($c['allergy_history'] ?? '');
     $baseInfo = "【主诉】{$cc}\n【现病史】{$pi}\n【体格检查】{$pe}\n【既往史/过敏史】{$al}\n【年龄】{$c['age']} 【性别】{$c['gender']}";
+    $ck = 'aidx_' . $mode . '_' . md5($baseInfo);
+    $cached = ai_cache_get($ck);
+    if ($cached !== null) ok($cached);
     if ($mode === 'tcm') {
         $task = <<<T
 # 任务（中医辨证论治模式）
@@ -607,8 +610,10 @@ P;
     $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
     $dx = is_array($j) && isset($j['differentials']) && is_array($j['differentials']) ? array_slice($j['differentials'], 0, 5) : [];
     if (!$dx) ok(['differentials' => [], 'missing_info' => [], 'note' => 'AI 返回格式异常，请稍后重试']);
-    ok(['differentials' => $dx, 'missing_info' => (array)($j['missing_info'] ?? []),
-        'disclaimer' => $j['disclaimer'] ?? '本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。']);
+    $out = ['differentials' => $dx, 'missing_info' => (array)($j['missing_info'] ?? []),
+        'disclaimer' => $j['disclaimer'] ?? '本结果由 AI 生成，仅供临床参考，不构成诊断或医疗建议，请以医生面诊判断为准。'];
+    ai_cache_set($ck, $out);
+    ok($out);
 }
 
 /* 采纳诊断时按需生成治疗方案（短输出，避免长响应截断） */
@@ -648,7 +653,7 @@ case 'ai_treatment': {
 
 # 规则
 1. 6-12 味饮片，剂量以克为单位符合《中国药典》2020版常规用量；严守十八反十九畏；与过敏史冲突时换药并在 note 说明。
-2. 每味药 source 标注出处；formula 与 formula_source 必填。
+2. 每味药 source 标注出处；formula 与 formula_source 必填。note/source/医嘱等文本字段尽量精简（每处≤20字），加快生成。
 3. aux_tests 为建议的辅助检查（0-3 项）。
 4. physio 为该证的中医理疗方案（1-3 项，针灸须列具体穴位与手法，出处标《针灸学》等教材；与病情不符的理疗类型不要输出）。
 P;
@@ -669,22 +674,30 @@ P;
 
 # 规则
 1. 2-4 种常用药物，剂量符合成人常规；与过敏史冲突时换药并在 note 说明。
-2. 每药 source 标注出处。
+2. 每药 source 标注出处。note 等文本字段尽量精简（≤20字），加快生成。
 3. aux_tests 为该诊断建议的辅助检查（0-3 项）。
 P;
     }
+    /* 缓存键：诊断+类型+实时病情（同一病情 15 分钟内秒回） */
+    $ck = 'trt_' . $type . '_' . md5($dx . '|' . ($cc ?? '') . '|' . ($pi ?? '') . '|' . ($c['age'] ?? '') . ($c['gender'] ?? ''));
+    $cached = ai_cache_get($ck);
+    if ($cached !== null) ok($cached);
     $r = llm_chat([['role' => 'user', 'content' => $prompt]], 120);
     if ($r === null) fail('AI 服务暂不可用，请稍后重试');
     $s = strpos($r, '{'); $e = strrpos($r, '}');
     $j = ($s !== false && $e !== false) ? json_decode(substr($r, $s, $e - $s + 1), true) : null;
     if (!is_array($j)) fail('AI 返回格式异常，请重试');
     if ($type === 'tcm') {
-        ok(['chinese_rx' => (array)($j['chinese_rx'] ?? []), 'formula' => (string)($j['formula'] ?? ''),
+        $out = ['chinese_rx' => (array)($j['chinese_rx'] ?? []), 'formula' => (string)($j['formula'] ?? ''),
             'physio' => (array)($j['physio'] ?? []),
-            'aux_tests' => (array)($j['aux_tests'] ?? []), 'notes' => (string)($j['notes'] ?? ''), 'type' => 'tcm']);
+            'aux_tests' => (array)($j['aux_tests'] ?? []), 'notes' => (string)($j['notes'] ?? ''), 'type' => 'tcm'];
+        ai_cache_set($ck, $out);
+        ok($out);
     }
-    ok(['western_rx' => (array)($j['western_rx'] ?? []), 'aux_tests' => (array)($j['aux_tests'] ?? []),
-        'notes' => (string)($j['notes'] ?? ''), 'type' => 'western']);
+    $out = ['western_rx' => (array)($j['western_rx'] ?? []), 'aux_tests' => (array)($j['aux_tests'] ?? []),
+        'notes' => (string)($j['notes'] ?? ''), 'type' => 'western'];
+    ai_cache_set($ck, $out);
+    ok($out);
 }
 
 /* 问诊录音归档：上传保存（医疗录音留存，可回放/修正转写） */
@@ -1055,6 +1068,9 @@ case 'organize_transcript': {
     $modeLabel2 = $mode === 'tcm' ? '中医' : '西医';
     /* 临床诊断（可传）：用于按诊断规范补全病历结构，但不得编造未提及的内容 */
     $dxCtx = trim($_POST['dx'] ?? '');
+    $ckOrg = 'org_' . $mode . '_' . md5($transcript . '|' . $dxCtx . '|' . $target);
+    $cachedOrg = ai_cache_get($ckOrg);
+    if ($cachedOrg !== null) ok($cachedOrg);
     $dxNote = $dxCtx !== '' ? "\n6. 医生已初步诊断：【{$dxCtx}】——请参照该诊断的规范病历结构补全现病史要素（起病情况与诱因、主要症状特点、伴随症状、诊疗经过、精神饮食睡眠等一般情况）。【只允许整理对话中真实提及的内容并按规范措辞重组，对话未提及的要素一律写「未提及」，严禁编造】。" : '';
     $prompt = <<<P
 你是门诊病历整理助手（{$modeLabel2}标准）。下面是一段医患问诊的口语转写，请整理为规范病历文本：
@@ -1079,11 +1095,13 @@ P;
         echo json_encode(['ok' => false, 'note' => 'AI 返回格式异常，已插入原始转写，恢复后可重新整理', 'raw' => $transcript], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    ok([
+    $out = [
         'chief_complaint' => trim((string)$j['chief_complaint']),
         'present_illness' => trim((string)($j['present_illness'] ?? '未提及')),
         'tcm_summary'     => trim((string)($j['tcm_summary'] ?? '未提及')),
-    ]);
+    ];
+    ai_cache_set($ckOrg, $out);
+    ok($out);
 }
 
 default:
