@@ -144,6 +144,7 @@ async function initDoctors() {
     $('b_doctor').onchange = () => { syncPeriods(); loadSlots(); };
     initDates();
     syncPeriods();
+    if (sel.options.length) { sel.selectedIndex = 0; loadSlots(); } /* 默认选中医生即加载时间格 */
   } catch (e) {}
 }
 /* 日期下拉：近两周内该医生有门诊的日期（周五/周日），option 带时段摘要 */
