@@ -616,6 +616,7 @@ async function openVisit(vid) {
   if (!j.ok) { alert(j.error || '加载失败'); return; }
   CUR.visit = vid; CUR.patient = j.patient; CUR.record = j.record; CUR.rx = j.prescriptions || {};
   window._rxDoses = { chinese: (CUR.rx.chinese && CUR.rx.chinese.doses) || 7 }; /* 中药剂数（整方属性，默认 7 剂） */
+  loadHerbSuppliers(); /* 药材价格源下拉 */
   const p = j.patient;
   $('ptbar').innerHTML = `<span class="gavic">${p.gender === '女' ? '♀' : '♂'}</span><b>${esc(p.name)}</b>
     <span class="meta">${esc(p.gender)} · ${esc(p.age)}岁 · ${esc(p.phone || p.archive_no || '')}</span>
@@ -763,7 +764,8 @@ function rxSheet(t) {
   const items = window['_rx_' + t] || (window['_rx_' + t] = []);
   const sub = items.reduce((s, it) => s + (+it.price || 0) * (+it.qty || 0), 0);
   const dosesHtml = t === 'chinese'
-    ? `<label style="font-size:12px;color:#8a6d1a;display:flex;align-items:center;gap:3px">剂数<input type="number" min="1" max="100" value="${(window._rxDoses && window._rxDoses.chinese) || 7}" onchange="window._rxDoses=window._rxDoses||{};window._rxDoses.chinese=Math.max(1,parseInt(this.value)||7)" style="width:46px;padding:2px 4px;border:1px solid #e8d99a;border-radius:4px;font:inherit;text-align:center"></label>`
+    ? `<label style="font-size:12px;color:#8a6d1a;display:flex;align-items:center;gap:3px">剂数<input type="number" min="1" max="100" value="${(window._rxDoses && window._rxDoses.chinese) || 7}" onchange="window._rxDoses=window._rxDoses||{};window._rxDoses.chinese=Math.max(1,parseInt(this.value)||7)" style="width:46px;padding:2px 4px;border:1px solid #e8d99a;border-radius:4px;font:inherit;text-align:center"></label>
+      <label style="font-size:12px;color:#8a6d1a;display:flex;align-items:center;gap:3px">价格来源<select id="herbSrc" onchange="applyHerbPrices(this.value)" style="padding:2px 4px;border:1px solid #e8d99a;border-radius:4px;font:inherit"><option value="">0（不计价）</option>${(window._herbSuppliers || []).map(s => `<option value="${s}"${(typeof sessionStorage !== 'undefined' && sessionStorage.getItem('herbSrc')) === s ? ' selected' : ''}>${s} 价格</option>`).join('')}</select></label>`
     : '';
   return `<div class="rxsheet" id="sheet_${t}">
     <div class="hd"><span class="rxtag">${RX_TITLE[t].replace('处方','')}</span><span class="free">已免费</span>
@@ -821,6 +823,33 @@ function renderRx() {
   ['western', 'infusion', 'chinese'].forEach(t => { const el = $('dd_' + t); if (el) window.attachSpeech(el); });
   calcTotals();
 }
+/* 药材价格源：加载供应商下拉 + 按供应商批量匹配价格 */
+async function loadHerbSuppliers() {
+  try {
+    const r = await fetch(A + 'herb_suppliers'); const j = await r.json();
+    if (!j.ok) return;
+    window._herbSuppliers = j.suppliers || [];
+    const saved = sessionStorage.getItem('herbSrc');
+    if (saved && saved !== '0' && window._herbSuppliers.includes(saved)) applyHerbPrices(saved); /* 恢复上次价格源 */
+    renderRx(); /* 重建下拉选项 */
+  } catch (e) {}
+}
+async function applyHerbPrices(supplier) {
+  sessionStorage.setItem('herbSrc', supplier || '');
+  const items = window['_rx_chinese'] || [];
+  if (!supplier) { items.forEach(it => it.price = 0); renderRx(); return; } /* 切回默认：价格归零 */
+  const names = [...new Set(items.map(x => (x.name || '').trim()).filter(Boolean))];
+  if (!names.length) { renderRx(); return; }
+  try {
+    const fd = new FormData();
+    fd.append('supplier', supplier); fd.append('names', JSON.stringify(names));
+    const r = await fetch(A + 'herb_price_batch', { method: 'POST', body: fd }); const j = await r.json();
+    if (!j.ok) return;
+    const prices = j.prices || {};
+    items.forEach(it => { if (it.name && prices[it.name] !== undefined) it.price = prices[it.name]; });
+  } catch (e) {}
+  renderRx();
+}
 function addRxRow(t) {
   (window['_rx_' + t] = window['_rx_' + t] || []);
   if (t === 'chinese') window['_rx_' + t].push({ name: '', qty: 1, qty_unit: 'g', prep: '', decoct: '', price: 0, drug_id: null });
@@ -859,7 +888,12 @@ async function drugSearch(t) {
   if (!kw) return;
   const r = await fetch(A + 'search_drug&kw=' + encodeURIComponent(kw)); const j = await r.json();
   showDd(input, (j.drugs || []).map(d => ({ label: `${d.name} ${d.spec} ¥${(+d.price).toFixed(2)}`, fn: () => {
-    (window['_rx_' + t] = window['_rx_' + t] || []).push({ drug_id: d.id, name: d.name, spec: d.spec, usage: d.default_usage, freq: d.default_freq, dose: '', dose_unit: t === 'chinese' ? 'g' : '片', days: 3, qty: 1, qty_unit: (QTY_UNITS[t] || ['盒'])[0], price: +d.price });
+    const it0 = { drug_id: d.id, name: d.name, spec: d.spec, usage: d.default_usage, freq: d.default_freq, dose: '', dose_unit: t === 'chinese' ? 'g' : '片', days: 3, qty: 1, qty_unit: (QTY_UNITS[t] || ['盒'])[0], price: t === 'chinese' ? 0 : +d.price }; /* 中药默认价 0，按价格源匹配 */
+    (window['_rx_' + t] = window['_rx_' + t] || []).push(it0);
+    if (t === 'chinese') {
+      const src = sessionStorage.getItem('herbSrc');
+      if (src) applyHerbPrices(src); /* 按当前价格源自动匹配 */
+    }
     renderRx(); input.value = '';
   }})));
 }

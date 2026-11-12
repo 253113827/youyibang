@@ -497,6 +497,25 @@ case 'patient_self_query': {
     ok(['patient' => $name, 'visits' => $out]);
 }
 
+/* ===== 药材价格源（如：福俭堂国医馆） ===== */
+case 'herb_suppliers': {
+    $rows = $pdo->query('SELECT DISTINCT supplier FROM herb_prices WHERE supplier != "" ORDER BY supplier')->fetchAll(PDO::FETCH_COLUMN);
+    ok(['suppliers' => $rows]);
+}
+case 'herb_price_batch': {
+    $supplier = trim($_POST['supplier'] ?? '');
+    if ($supplier === '') ok(['prices' => new stdClass()]);
+    $names = json_decode($_POST['names'] ?? '[]', true);
+    if (!is_array($names) || !$names) ok(['prices' => new stdClass()]);
+    $names = array_slice(array_map('trim', $names), 0, 300);
+    $ph = implode(',', array_fill(0, count($names), '?'));
+    $st = $pdo->prepare("SELECT name, price FROM herb_prices WHERE supplier=? AND name IN ($ph)");
+    $st->execute(array_merge([$supplier], $names));
+    $out = [];
+    foreach ($st->fetchAll() as $r) $out[$r['name']] = (float)$r['price'];
+    ok(['prices' => $out ?: new stdClass()]);
+}
+
 /* 今日队列 + 患者列表 + 历史就诊 */
 /* 删除患者（软删除：病历/处方数据保留，仅从列表隐藏） */
 case 'del_patient': {
