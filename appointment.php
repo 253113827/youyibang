@@ -195,13 +195,14 @@ async function loadSlots() {
     if (!j.ok) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">' + esc(j.error || '加载失败') + '</span>'; return; }
     if (j.noweek) { grid.innerHTML = '<span style="font-size:13px;color:#c62828">该医生当日无门诊（出诊时间：周五 14:30-17:30 / 18:30-21:00，周日 09:00-12:00 / 14:30-17:30），请选择出诊日期</span>'; return; }
     let html = '';
-    (j.sessions || []).forEach(ses => {
+    const curPeriod = $('b_period').value; /* 只显示所选时段的格子 */
+    (j.sessions || []).filter(ses => ses.period === curPeriod).forEach(ses => {
       const left = ses.left != null ? ses.left : (ses.cap - ses.booked);
       const stat = left <= 0 ? '<span style="color:#c62828;font-weight:600">已约满</span>'
         : `剩 ${left} 可约`;
       html += `<div style="flex-basis:100%;font-size:12px;color:#8a6d1a;margin:4px 0 2px"><b>${esc(ses.period)}</b> ${esc(ses.start)}-${esc(ses.end)} · 已约 ${ses.booked}/${ses.cap}（${stat}）</div>`;
     });
-    html += (j.slots || []).map(s => {
+    html += (j.slots || []).filter(s => s.period === curPeriod).map(s => {
       const key = s.period + '|' + s.slot;
       if (s.full) return `<button type="button" disabled class="slotbtn" style="background:#eee;color:#bbb;cursor:not-allowed" data-key="${key}">${s.slot}<br><small>满</small></button>`;
       if (s.reserved) return `<button type="button" disabled class="slotbtn" style="background:#fff8e1;border:1.5px dashed #ef6c00;color:#bbb;cursor:not-allowed" title="预留号（到店挂号/电话预约可用）" data-key="${key}">${s.slot}<br><small>预留</small></button>`;
