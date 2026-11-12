@@ -861,6 +861,8 @@ case 'appt_set_status': {
     $s = $_POST['status'] ?? '';
     $map = ['in_visit' => 'in_visit', 'done' => 'done', 'cancelled' => 'cancelled', 'noshow' => 'noshow', 'pending' => 'pending'];
     if (!isset($map[$s])) fail('状态错误');
+    /* 单医生同时只看一位：开始新就诊时，其他「就诊中」自动回退待诊（防误点多开导致横幅残留） */
+    if ($s === 'in_visit') $pdo->prepare("UPDATE appointments SET status='pending', called_at=NULL WHERE status='in_visit' AND visit_date=CURDATE() AND id != ?")->execute([$id]);
     $pdo->prepare("UPDATE appointments SET status=?, finished_at=IF(? IN ('done','noshow','cancelled'), NOW(), finished_at) WHERE id=?")->execute([$s, $s, $id]);
     ok(['updated' => $id, 'status' => $s]);
 }
@@ -1552,6 +1554,13 @@ case 'finish_visit': {
     $vid = (int)($_POST['visit_id'] ?? 0);
     check_visit($vid);
     $pdo->prepare("UPDATE visits SET status='done', finished_at=NOW() WHERE id=?")->execute([$vid]);
+    /* 联动：该患者今日预约同步标记完成，避免预约横幅残留「就诊中」 */
+    $pdo->prepare("UPDATE appointments a
+        JOIN visits v ON v.id = ?
+        JOIN patients p ON p.id = v.patient_id
+        SET a.status='done', a.finished_at=NOW()
+        WHERE a.phone = p.phone AND a.visit_date = CURDATE() AND a.status IN ('pending','called','in_visit')")
+        ->execute([$vid]);
     ok(['visit_id' => $vid, 'status' => 'done']);
 }
 
