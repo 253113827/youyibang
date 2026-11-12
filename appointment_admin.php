@@ -131,7 +131,7 @@ async function load() {
       <button class="b-ns" onclick="if(confirm('确定取消该预约？'))act('appt_set_status&x=1', ${a.id}, 'cancelled')">取消</button>` : ''}
     </td></tr>`).join('') || '<tr><td colspan="10" style="color:#99a1ad">该日期暂无预约</td></tr>';
   /* 当前叫号横幅 */
-  const cur = list.filter(a => ['called', 'in_visit'].includes(a.status)).sort((a, b) => (b.called_at || '').localeCompare(a.called_at || ''))[0];
+  const cur = list.filter(a => a.status === 'in_visit').sort((a, b) => (b.called_at || '').localeCompare(a.called_at || ''))[0]; /* 仅真正就诊中才显示横幅 */
   const nb = $('nowBanner');
   if (cur) { nb.style.display = 'flex'; $('nbNo').textContent = cur.queue_no + ' 号 ' + cur.name[0] + '**'; $('nbMeta').textContent = cur.time_period + ' · ' + stCn[cur.status] + (cur.called_at ? ' · ' + cur.called_at.slice(11, 16) : ''); }
   else nb.style.display = 'none';
