@@ -119,7 +119,7 @@ async function load() {
     <td data-l="电话">${esc(a.phone)}</td>
     <td data-l="医生/时段">${esc(a.doctor || '-')}</td>
     <td data-l="科室">${esc(a.dept || '中医科')}</td>
-    <td data-l="挂号费">¥10.00</td>
+    <td data-l="挂号费">¥<?= number_format((float)($a['reg_fee'] ?? 10), 2) ?></td>
     <td data-l="来源">${esc(a.source)}</td>
     <td data-l="状态"><span class="st ${stCls[a.status]}">${stCn[a.status]}</span></td>
     <td class="ops" data-l="操作">
@@ -202,6 +202,7 @@ async function submitAdminBook() {
   });
   fd.append('gender', $('ab_gender').value);
   fd.append('age', $('ab_age').value);
+  fd.append('reg_fee', $('ab_fee').value || 10);
   fd.append('source', $('ab_src').value);
   try {
     const r = await fetch(A + 'appt_admin_book', { method: 'POST', body: fd }); const j = await r.json();
@@ -298,6 +299,7 @@ setInterval(load, 30000);
       <label>时段<select id="ab_period" onchange="_loadAbSlots()"></select></label>
       <label>性别<select id="ab_gender"><option>未知</option><option>男</option><option>女</option></select></label>
       <label>年龄<input id="ab_age" inputmode="numeric"></label>
+      <label>挂号费 ¥<input id="ab_fee" inputmode="decimal" value="10"></label>
       <label>来源<select id="ab_src"><option>现场</option><option>电话</option><option>复诊</option></select></label>
     </div>
     <label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">选择时间段</label>

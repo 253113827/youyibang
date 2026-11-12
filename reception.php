@@ -640,7 +640,7 @@ async function openVisit(vid) {
   const p = j.patient;
   $('ptbar').innerHTML = `<span class="gavic">${p.gender === '女' ? '♀' : '♂'}</span><b>${esc(p.name)}</b>
     <span class="meta">${esc(p.gender)} · ${esc(p.age)}岁 · ${esc(p.phone || p.archive_no || '')}</span>
-    <span class="doc-chip">施宣赫 - 中医科</span><span class="fee">挂号费 <b>¥${(+p.reg_fee).toFixed(2)}</b></span>
+    <span class="doc-chip">施宣赫 - 中医科</span><span class="fee" style="cursor:pointer" title="点击修改挂号费" onclick="editRegFee()">挂号费 <b id="ptFee">¥${(+p.reg_fee).toFixed(2)}</b></span>
     <span class="paytype">自费</span>
     <button class="btn outline sm" title="编辑患者档案" onclick="openEditPt()">✏️</button>
     ${p.case_id ? `<a class="btn outline sm" style="color:#00b578;border-color:#00b578" href="case.php?id=${p.case_id}">进入医案 →</a>` : ''}
@@ -1194,6 +1194,18 @@ function labInsertCard(x) {
   document.getElementById('labList').prepend(d);
 }
 /* ===== 顶部 rtabs：会话 / 历史 / 影像 ===== */
+function editRegFee() {
+  if (!CUR.visit) return;
+  const v = prompt('请输入挂号费（元）：', ((CUR.patient && CUR.patient.reg_fee) || 10).toString());
+  if (v === null) return;
+  const fee = parseFloat(v);
+  if (isNaN(fee) || fee < 0) return alert('请输入有效金额');
+  const fd = new FormData(); fd.append('visit_id', CUR.visit); fd.append('reg_fee', fee);
+  fetch(A + 'set_reg_fee', { method: 'POST', body: fd }).then(r => r.json()).then(j => {
+    if (j.ok) { CUR.patient.reg_fee = j.reg_fee; const el = document.getElementById('ptFee'); if (el) el.textContent = '¥' + j.reg_fee.toFixed(2); }
+    else alert(j.error || '修改失败');
+  }).catch(() => alert('网络异常'));
+}
 function _ptModal(title, bodyHtml) {
   let m = document.getElementById('mPtTab');
   if (!m) {

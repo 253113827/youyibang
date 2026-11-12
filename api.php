@@ -789,7 +789,7 @@ case 'appt_walkin': {
         $pdo->prepare('UPDATE patients SET archive_no=? WHERE id=?')->execute(['OPD' . str_pad((string)$pid, 6, '0', STR_PAD_LEFT), $pid]);
     }
     $pdo->prepare('INSERT INTO visits (patient_id, doctor_id, status, reg_fee) VALUES (?,?,?,?)')
-        ->execute([$pid, $uid, 'waiting', 10]);
+        ->execute([$pid, $uid, 'waiting', max(0, (float)($ap['reg_fee'] ?? 10))]); /* 沿用预约上的挂号费 */
     $vid = (int)$pdo->lastInsertId();
     $pdo->prepare("UPDATE appointments SET status='in_visit' WHERE id=?")->execute([$id]);
     $pdo->commit();
@@ -836,8 +836,8 @@ case 'appt_admin_book': {
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period]);
     $queue = (int)$st->fetchColumn() + 1;
-    $st = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
-    $st->execute([$name, ($_POST['gender'] ?? '未知') ?: '未知', trim($_POST['age'] ?? ''), $phone, $idc, '中医科', $doctor, $date, $period, $slot, $queue, $source]);
+    $st = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source, reg_fee) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    $st->execute([$name, ($_POST['gender'] ?? '未知') ?: '未知', trim($_POST['age'] ?? ''), $phone, $idc, '中医科', $doctor, $date, $period, $slot, $queue, $source, max(0, (float)($_POST['reg_fee'] ?? 10))]);
     ok(['id' => (int)$pdo->lastInsertId(), 'queue_no' => $queue]);
 }
 
@@ -1562,6 +1562,15 @@ case 'finish_visit': {
         WHERE a.phone = p.phone AND a.visit_date = CURDATE() AND a.status IN ('pending','called','in_visit')")
         ->execute([$vid]);
     ok(['visit_id' => $vid, 'status' => 'done']);
+}
+
+/* 修改接诊挂号费 */
+case 'set_reg_fee': {
+    $vid = (int)($_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    $fee = max(0, (float)($_POST['reg_fee'] ?? 0));
+    $pdo->prepare('UPDATE visits SET reg_fee=? WHERE id=?')->execute([$fee, $vid]);
+    ok(['visit_id' => $vid, 'reg_fee' => $fee]);
 }
 
 /* 打印输出：病历 + 处方单（A4） */
