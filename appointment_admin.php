@@ -91,7 +91,9 @@ const stCn = { pending: '待诊', called: '已叫号', in_visit: '就诊中', do
 const stCls = { pending: 'pending', called: 'called', in_visit: 'in_visit', done: 'done', noshow: 'noshow', cancelled: 'cancelled' };
 async function _initDoctors() {
   try { const r = await fetch(A + 'appt_doctors'); const j = await r.json();
-    if (j.ok) $('ab_doctor').innerHTML = (j.doctors || []).map(d => `<option>${esc(d.name)}</option>`).join('');
+    if (j.ok) { const opts = (j.doctors || []).map(d => `<option>${esc(d.name)}</option>`).join('');
+      $('ab_doctor').innerHTML = opts;
+      const im = $('im_doctor'); if (im && !im.innerHTML.trim()) im.innerHTML = opts; }
   } catch (e) {}
 }
 _initDoctors();
@@ -202,7 +204,7 @@ function copyRemind(t) {
 let _importList = [];
 function openImport() {
   $('im_date').value = $('d').value;
-  _initDoctors().then(() => { $('im_doctor').value = '施宣赫'; });
+  _initDoctors().then(() => { const s = $('im_doctor'); s.value = '施宣赫'; if (!s.value) s.selectedIndex = 0; });
   $('im_file').value = ''; $('imStatus').textContent = ''; $('imPreview').innerHTML = '';
   $('imCommitBtn').style.display = 'none'; _importList = [];
   $('mImport').classList.add('show');
@@ -233,6 +235,10 @@ async function importParse(input) {
   } catch (e) { st.textContent = '❌ 网络异常：' + e.message; }
 }
 async function importCommit() {
+  const dErr = [];
+  if (!$('im_doctor').value) dErr.push('请选择医生');
+  if (!$('im_date').value) dErr.push('请选择预约日期');
+  if (dErr.length) return alert(dErr.join('；'));
   const list = _importList.filter(x => !x._skip).map(x => ({ name: x.name, phone: x.phone, period: x.period, time_slot: x.time_slot }));
   if (!list.length) return alert('没有勾选任何行');
   $('imCommitBtn').disabled = true;

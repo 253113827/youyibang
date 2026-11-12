@@ -715,7 +715,7 @@ case 'appt_import_commit': {
         $ph = trim((string)($r['phone'] ?? ''));
         $per = (($r['period'] ?? '') === '下午' || ($r['period'] ?? '') === '晚上') ? '下午' : '上午';
         $slot = trim((string)($r['time_slot'] ?? ''));
-        if ($nm === '' || $ph === '' || $slot === '') continue;
+        if ($nm === '' || $ph === '' || $slot === '') { $skip[] = ($nm ?: '未知名') . '（信息不完整）'; continue; }
         $stChk->execute([$nm, $ph, $date]);
         if ((int)$stChk->fetchColumn()) { $skip[] = $nm . '（当天已存在）'; continue; }
         $stMax->execute([$doctor, $date, $per]);
