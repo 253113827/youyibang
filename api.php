@@ -549,13 +549,12 @@ case 'appt_slots_view': {
     $out = []; $sessions = [];
     foreach ($daySessions as $ses) {
         $period = $ses['p'];
-        $cap = max(1, (int)($ses['cap'] ?? 15));
         $s0 = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
         $s1 = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2);
-        /* 固定 12 分钟粒度（与预约表一致），容量均分到格子 */
-        $slotMin = 12;
+        /* 固定 10 分钟一格，号源数由时长自动决定（不写死容量） */
+        $slotMin = 10;
         $nSlots = max(1, intdiv($s1 - $s0, $slotMin));
-        $perSlot = intdiv($cap, $nSlots); $extra = $cap % $nSlots;
+        $cap = $nSlots;
         $booked = 0;
         foreach ($rowsAll as $r0) if ($r0['time_period'] === $period) $booked++;
         $bookable = ['period' => $period, 'start' => $ses['s'], 'end' => $ses['e'], 'cap' => $cap, 'booked' => $booked, 'left' => 0];
@@ -563,7 +562,7 @@ case 'appt_slots_view': {
         while ($idx < $nSlots) {
             $tCur = $s0 + $idx * $slotMin;
             $slot = sprintf('%02d:%02d', intdiv($tCur, 60), $tCur % 60);
-            $capacity = $perSlot + ($idx < $extra ? 1 : 0);
+            $capacity = 1;
             $usedCnt = 0; $mine = false;
             foreach ($rowsAll as $r1) {
                 if ($r1['time_period'] === $period && $r1['time_slot'] === $slot) {
@@ -604,25 +603,24 @@ case 'appt_book': {
     $ses = null;
     foreach ($daySessions as $s0) if (($s0['p'] ?? '') === $period) { $ses = $s0; break; }
     if (!$ses) fail('请选择该医生当日的门诊时段');
-    $cap = max(1, (int)($ses['cap'] ?? 15));
+    $cap = max(1, (int)($ses['cap'] ?? 15)); /* 兼容读取，实际容量按时长自动算 */
     if ($slot < $ses['s'] || $slot >= $ses['e']) fail('所选时间不在 ' . $ses['s'] . '-' . $ses['e'] . ' 内');
-    /* 该时段总容量校验 */
+    $dur = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2));
+    $nSlots = max(1, intdiv($dur, 10)); /* 固定 10 分钟一格，号源数由时长决定 */
+    $cap = $nSlots;
+    $perSlotCap = 1;
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period]);
     if ((int)$st->fetchColumn() >= $cap) fail($period . '号已约满（共 ' . $cap . ' 个），请选择其他时段');
     /* 该格子容量校验 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period, $slot]);
-    $dur = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2));
-    $nSlots = max(1, intdiv($dur, 12)); /* 固定 12 分钟粒度 */
-    $slotIdx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2)), 12);
-    $perSlotCap = intdiv($cap, $nSlots) + ($slotIdx < $cap % $nSlots ? 1 : 0);
     if ((int)$st->fetchColumn() >= $perSlotCap) fail('该时间段已约满，请选择相邻时间');
     /* 预留号患者不可自约 */
     $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
     if ($reserve > 0) {
         $s0min = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
-        $idx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - $s0min, 12);
+        $idx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - $s0min, 10);
         if ($idx >= $nSlots - $reserve) fail('该时间为预留号（到店挂号/电话预约可用），请选择其他时间');
     }
     /* 同人同日去重 */
@@ -801,9 +799,9 @@ case 'appt_admin_book': {
     $st->execute([$doctor, $date, $period]);
     if ((int)$st->fetchColumn() >= $cap) fail($period . '号已约满（共 ' . $cap . ' 个）');
     $dur = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2));
-    $nSlots = max(1, intdiv($dur, 12)); /* 固定 12 分钟粒度 */
-    $slotIdx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2)), 12);
-    $perSlotCap = intdiv($cap, $nSlots) + ($slotIdx < $cap % $nSlots ? 1 : 0);
+    $nSlots = max(1, intdiv($dur, 10)); /* 固定 10 分钟一格 */
+    $cap = $nSlots;
+    $perSlotCap = 1;
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period, $slot]);
     if ((int)$st->fetchColumn() >= $perSlotCap) fail('该时间段已约满（容量 ' . $perSlotCap . '），请选相邻时间');
