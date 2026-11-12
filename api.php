@@ -726,6 +726,32 @@ case 'appt_import_commit': {
     ok(['imported' => $okN, 'skipped' => $skip]);
 }
 
+/* 预约一键转接诊：复用/新建患者档案 + 建 waiting visit + 预约标记 in_visit */
+case 'appt_walkin': {
+    $id = (int)($_POST['id'] ?? 0);
+    $uid = (int)($_SESSION['uid'] ?? 1);
+    $st = $pdo->prepare("SELECT * FROM appointments WHERE id=? AND status IN ('pending','called')");
+    $st->execute([$id]);
+    $ap = $st->fetch();
+    if (!$ap) fail('预约不存在或已接诊');
+    $pdo->beginTransaction();
+    $stP = $pdo->prepare('SELECT id FROM patients WHERE name=? AND phone=? AND is_deleted=0 ORDER BY id LIMIT 1');
+    $stP->execute([$ap['name'], $ap['phone']]);
+    $pid = (int)$stP->fetchColumn();
+    if (!$pid) {
+        $ins = $pdo->prepare('INSERT INTO patients (name, gender, age, phone) VALUES (?,?,?,?)');
+        $ins->execute([$ap['name'], '未知', (string)($ap['age'] ?? ''), $ap['phone']]);
+        $pid = (int)$pdo->lastInsertId();
+        $pdo->prepare('UPDATE patients SET archive_no=? WHERE id=?')->execute(['OPD' . str_pad((string)$pid, 6, '0', STR_PAD_LEFT), $pid]);
+    }
+    $pdo->prepare('INSERT INTO visits (patient_id, doctor_id, status, reg_fee) VALUES (?,?,?,?)')
+        ->execute([$pid, $uid, 'waiting', 10]);
+    $vid = (int)$pdo->lastInsertId();
+    $pdo->prepare("UPDATE appointments SET status='in_visit' WHERE id=?")->execute([$id]);
+    $pdo->commit();
+    ok(['visit_id' => $vid, 'patient_id' => $pid]);
+}
+
 /* 医生端代录预约（现场挂号/电话/复诊），可占用预留号 */
 case 'appt_admin_book': {
     $name = trim($_POST['name'] ?? '');
@@ -892,7 +918,10 @@ case 'queue': {
         WHERE v.doctor_id = ? AND v.status = 'done' AND DATE(v.registered_at) < CURDATE() AND p.is_deleted = 0
         ORDER BY v.finished_at DESC LIMIT 30");
     $hist->execute([$uid]);
-    ok(['today' => $today->fetchAll(), 'history' => $hist->fetchAll()]);
+    $apt = $pdo->query("SELECT id, name, phone, time_period, time_slot, queue_no, status
+        FROM appointments WHERE visit_date = CURDATE() AND status IN ('pending','called')
+        ORDER BY FIELD(time_period,'上午','下午'), time_slot");
+    ok(['today' => $today->fetchAll(), 'history' => $hist->fetchAll(), 'appt_today' => $apt->fetchAll()]);
 }
 
 /* 保存结构化病历（opd_records + 可选处方批量保存） */

@@ -313,6 +313,8 @@ table.rx .rowdel:hover { color:var(--danger); }
   </div>
   <div class="qsec">今天 · 全部</div>
   <div id="todayList"></div>
+  <div class="qsec" style="margin-top:8px" id="apptSec" hidden>今日预约（点击接诊）</div>
+  <div id="apptList"></div>
   <div class="qsec" style="margin-top:8px">历史就诊</div>
   <div id="histList"></div>
   <div class="tools desk-only">
@@ -606,9 +608,25 @@ function renderQueue() {
       <span class="qright"><span class="qtime">${v.registered_at.slice(11,16) || ''}</span>
       <span class="st ${v.status}">${({waiting:'待诊',in_visit:'就诊中',done:'已诊'})[v.status]}</span></span></div>`).join('')
     || '<p class="hint" style="padding:10px 14px">今日暂无患者，点击「快速接诊」。</p>';
+  const appts = (Q.appt_today || []).filter(v => !kw || v.name.includes(kw));
+  $('apptSec').hidden = !appts.length;
+  $('apptList').innerHTML = appts.map(v =>
+    `<div class="qitem" onclick="apptWalkin(${v.id})">
+      <span class="avic m">⏱</span>
+      <span class="qmain"><b>${esc(v.name)}</b><span class="qdoc">预约 ${esc(v.time_period)} ${esc(v.time_slot)} · ${v.queue_no}号</span></span>
+      <span class="qright"><span class="st waiting">接诊 ›</span></span></div>`).join('');
   $('histList').innerHTML = Q.history.map(v =>
     `<div class="histitem" style="cursor:pointer" onclick="openVisit(${v.id})"><b>${esc(v.name)}</b> · ${esc(v.diagnosis || '未记录诊断')}<br><span class="hint">${esc(v.finished_at)} · 医生#${v.uid} · 点击重新打开本次就诊</span></div>`).join('')
     || '<p class="hint">无历史就诊。</p>';
+}
+
+/* ---------- 预约一键接诊 ---------- */
+async function apptWalkin(id) {
+  if (!confirm('为该预约患者建档并开始接诊？')) return;
+  const fd = new FormData(); fd.append('id', id);
+  const r = await fetch(A + 'appt_walkin', { method: 'POST', body: fd }); const j = await r.json();
+  if (j.ok) { await load(); openVisit(j.visit_id); }
+  else alert('❌ ' + (j.error || '接诊失败'));
 }
 
 /* ---------- 打开接诊 ---------- */
