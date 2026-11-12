@@ -1197,8 +1197,8 @@ function labInsertCard(x) {
 function _ptModal(title, bodyHtml) {
   let m = document.getElementById('mPtTab');
   if (!m) {
-    m = document.createElement('div'); m.id = 'mPtTab'; m.className = 'modal'; m.style.zIndex = 60;
-    m.innerHTML = '<div class="mbox"><h3 style="font-size:16px;margin-bottom:10px" id="ptTabTitle"></h3><div id="ptTabBody" style="max-height:60vh;overflow:auto"></div><div style="text-align:right;margin-top:10px"><button class="btn gray sm" onclick="document.getElementById(\'mPtTab\').classList.remove(\'show\')">关闭</button></div></div>';
+    m = document.createElement('div'); m.id = 'mPtTab'; m.className = 'modal'; m.style.zIndex = 100;
+    m.innerHTML = '<div class="box" style="width:min(560px,94vw)"><h3 style="font-size:16px;margin-bottom:10px" id="ptTabTitle"></h3><div id="ptTabBody" style="max-height:60vh;overflow:auto;font-size:13px"></div><div style="text-align:right;margin-top:10px"><button class="btn gray sm" onclick="document.getElementById(\'mPtTab\').classList.remove(\'show\')">关闭</button></div></div>';
     document.body.appendChild(m);
   }
   m.onclick = e => { if (e.target === m) m.classList.remove('show'); };
