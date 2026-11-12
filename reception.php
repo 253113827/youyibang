@@ -485,7 +485,8 @@ table.rx .rowdel:hover { color:var(--danger); }
     <label class="fl">性别<select id="np_g"><option>男</option><option>女</option><option>未知</option></select></label>
     <label class="fl">年龄<input id="np_age" inputmode="numeric"></label>
     </div>
-    <label class="fl">电话<input id="np_phone"></label>
+    <label class="fl">电话*<input id="np_phone"></label>
+    <label class="fl">身份证号*<input id="np_idc" placeholder="用于患者自助查询"></label>
     <label class="fl">过敏史<input id="np_al"></label>
     <label class="fl">挂号费 ¥<input id="np_fee" value="10" inputmode="decimal"></label>
     <div style="display:flex;gap:8px"><button class="btn primary" onclick="createPatient()">挂号并接诊</button>
@@ -503,6 +504,7 @@ table.rx .rowdel:hover { color:var(--danger); }
     <label class="fl">年龄<input id="ep_age" inputmode="numeric"></label>
     </div>
     <label class="fl">电话<input id="ep_phone"></label>
+    <label class="fl">身份证号<input id="ep_idc" placeholder="用于患者自助查询"></label>
     <label class="fl">过敏史<input id="ep_al"></label>
     <div style="display:flex;gap:8px"><button class="btn primary" onclick="savePatient()">保存档案</button>
     <button class="btn gray" onclick="document.getElementById('mEdit').classList.remove('show')">取消</button>
@@ -1284,7 +1286,7 @@ async function createPatient() {
   const name = $('np_name').value.trim(); if (!name) return alert('姓名必填');
   const fd = new FormData();
   fd.append('name', name); fd.append('gender', $('np_g').value); fd.append('age', $('np_age').value);
-  fd.append('phone', $('np_phone').value); fd.append('allergy', $('np_al').value); fd.append('reg_fee', $('np_fee').value || 10);
+  fd.append('phone', $('np_phone').value); fd.append('id_card', $('np_idc').value); fd.append('allergy', $('np_al').value); fd.append('reg_fee', $('np_fee').value || 10);
   const r = await fetch(A + 'create_patient', { method: 'POST', body: fd }); const j = await r.json();
   if (j.ok) { $('mNew').classList.remove('show'); await loadQueue(); openVisit(j.visit_id); }
   else alert(j.error || '失败');
@@ -1293,7 +1295,7 @@ function openEditPt() {
   if (!CUR.patient) return;
   const p = CUR.patient;
   $('ep_name').value = p.name || ''; $('ep_g').value = p.gender || '未知'; $('ep_age').value = p.age || '';
-  $('ep_phone').value = p.phone || ''; $('ep_al').value = p.allergy || '';
+  $('ep_phone').value = p.phone || ''; $('ep_idc').value = p.id_card || ''; $('ep_al').value = p.allergy || '';
   $('mEdit').classList.add('show');
 }
 async function savePatient() {
@@ -1301,7 +1303,7 @@ async function savePatient() {
   const fd = new FormData();
   fd.append('patient_id', CUR.patient.id);
   fd.append('name', $('ep_name').value); fd.append('gender', $('ep_g').value);
-  fd.append('age', $('ep_age').value); fd.append('phone', $('ep_phone').value); fd.append('allergy', $('ep_al').value);
+  fd.append('age', $('ep_age').value); fd.append('phone', $('ep_phone').value); fd.append('id_card', $('ep_idc').value); fd.append('allergy', $('ep_al').value);
   const r = await fetch(A + 'update_patient', { method: 'POST', body: fd }); const j = await r.json();
   if (j.ok) { $('mEdit').classList.remove('show'); openVisit(CUR.visit); } else alert(j.error || '失败');
 }

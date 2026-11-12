@@ -60,6 +60,7 @@ if ($editId) foreach ($rows as $r) if ($r['id'] == $editId) $editRow = $r;
   <span class="logo">有医帮</span>
   <a href="reception.php">门诊</a>
   <a class="act" href="index.php">医案问诊</a>
+  <a href="patient_query.php">🔎 患者查询</a>
   <span class="mod">预约</span><span class="mod">收费</span><span class="mod">药房</span><span class="mod">库存</span><span class="mod">统计</span>
   <span class="right"><a href="logout.php">退出</a></span>
 </nav>

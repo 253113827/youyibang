@@ -3,11 +3,17 @@
 require __DIR__ . '/config.php';
 require __DIR__ . '/presets.php';
 require __DIR__ . '/rules.php';
-need_login();
 header('Content-Type: application/json; charset=utf-8');
 
 $act = $_GET['act'] ?? $_POST['act'] ?? '';
+/* 患者自助查询为公开接口（三要素验证），其余一律要求登录 */
+if ($act !== 'patient_self_query') need_login();
 $pdo = db();
+
+/* 去除历史数据中混入正文的 AI 标注行（免责声明统一在单据底部） */
+function strip_ai_note($s) {
+    return str_replace(['本整理由 AI 生成，请医生核对', '本整理由AI生成，请医生核对'], '', (string)$s);
+}
 
 function fail(string $msg, int $code = 400) {
     http_response_code($code);
@@ -390,9 +396,9 @@ case 'create_patient': {
     $gender = in_array($_POST['gender'] ?? '', ['男', '女', '未知']) ? $_POST['gender'] : '未知';
     $uid = (int)($_SESSION['uid'] ?? 1);
     $pdo->beginTransaction();
-    $st = $pdo->prepare('INSERT INTO patients (name, gender, age, birthdate, phone, allergy) VALUES (?,?,?,?,?,?)');
+    $st = $pdo->prepare('INSERT INTO patients (name, gender, age, birthdate, phone, id_card, allergy) VALUES (?,?,?,?,?,?,?)');
     $st->execute([$name, $gender, trim($_POST['age'] ?? ''), ($_POST['birthdate'] ?? '') ?: null,
-                  trim($_POST['phone'] ?? ''), trim($_POST['allergy'] ?? '')]);
+                  trim($_POST['phone'] ?? ''), trim($_POST['id_card'] ?? ''), trim($_POST['allergy'] ?? '')]);
     $pid = (int)$pdo->lastInsertId();
     $arc = 'OPD' . str_pad((string)$pid, 6, '0', STR_PAD_LEFT);
     $pdo->prepare('UPDATE patients SET archive_no=? WHERE id=?')->execute([$arc, $pid]);
@@ -415,9 +421,57 @@ case 'update_patient': {
     $name = trim($_POST['name'] ?? '');
     if ($name === '') fail('患者姓名为空');
     $gender = in_array($_POST['gender'] ?? '', ['男', '女', '未知']) ? $_POST['gender'] : '未知';
-    $pdo->prepare('UPDATE patients SET name=?, gender=?, age=?, phone=?, allergy=? WHERE id=?')
-        ->execute([$name, $gender, trim($_POST['age'] ?? ''), trim($_POST['phone'] ?? ''), trim($_POST['allergy'] ?? ''), $pid]);
+    $pdo->prepare('UPDATE patients SET name=?, gender=?, age=?, phone=?, id_card=?, allergy=? WHERE id=?')
+        ->execute([$name, $gender, trim($_POST['age'] ?? ''), trim($_POST['phone'] ?? ''), trim($_POST['id_card'] ?? ''), trim($_POST['allergy'] ?? ''), $pid]);
     ok(['patient_id' => $pid]);
+}
+
+/* 患者自助查询（公开）：姓名+电话+身份证号 三要素匹配，仅返回最近 7 日就诊 */
+case 'patient_self_query': {
+    $name = trim($_POST['name'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $idc = trim($_POST['id_card'] ?? '');
+    if ($name === '' || $phone === '' || $idc === '') fail('请填写姓名、电话和身份证号');
+    $st = $pdo->prepare('SELECT id FROM patients WHERE name=? AND phone=? AND id_card=? AND is_deleted=0');
+    $st->execute([$name, $phone, $idc]);
+    $pids = $st->fetchAll(PDO::FETCH_COLUMN);
+    if (!$pids) fail('未查询到匹配的就诊记录，请核对姓名/电话/身份证号');
+    $in = implode(',', array_fill(0, count($pids), '?'));
+    $st = $pdo->prepare("SELECT v.id, v.registered_at, v.status, o.diagnosis, o.chief_complaint, o.present_illness,
+        o.physical_exam, o.inspection, o.notes
+        FROM visits v LEFT JOIN opd_records o ON o.visit_id = v.id
+        WHERE v.patient_id IN ($in) AND v.registered_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        ORDER BY v.registered_at DESC");
+    $st->execute($pids);
+    $visits = $st->fetchAll();
+    $out = [];
+    foreach ($visits as $v) {
+        $rst = $pdo->prepare('SELECT type, items FROM prescriptions WHERE visit_id=? ORDER BY id');
+        $rst->execute([$v['id']]);
+        $rxs = [];
+        foreach ($rst->fetchAll() as $r) {
+            $items = json_decode((string)$r['items'], true) ?: [];
+            $names = [];
+            foreach ($items as $it) {
+                $names[] = ($it['name'] ?? '') . (isset($it['qty_g']) ? ' ' . ($it['qty_g'] ?? '') . 'g' : (isset($it['dose']) ? ' ' . ($it['dose'] ?? '') : ''));
+            }
+            if ($names) $rxs[] = ['type' => $r['type'], 'items' => $names];
+        }
+        $ins = json_decode((string)($v['inspection'] ?? '[]'), true) ?: [];
+        $out[] = [
+            'visit_id' => (int)$v['id'],
+            'date' => substr((string)$v['registered_at'], 0, 16),
+            'status' => $v['status'],
+            'diagnosis' => strip_ai_note((string)($v['diagnosis'] ?? '')),
+            'chief_complaint' => strip_ai_note((string)($v['chief_complaint'] ?? '')),
+            'present_illness' => strip_ai_note((string)($v['present_illness'] ?? '')),
+            'physical_exam' => strip_ai_note((string)($v['physical_exam'] ?? '')),
+            'inspection' => $ins,
+            'notes' => strip_ai_note((string)($v['notes'] ?? '')),
+            'prescriptions' => $rxs,
+        ];
+    }
+    ok(['patient' => $name, 'visits' => $out]);
 }
 
 /* 今日队列 + 患者列表 + 历史就诊 */
@@ -1060,6 +1114,12 @@ case 'print_opd': {
     foreach ($trt as $i => $a) { $amt = (float)($a['price'] ?? 0) * (float)($a['times'] ?? 1); $trtSum += $amt;
         $trtHtml .= ($i + 1) . '. ' . $e(($a['name'] ?? '') . ' ×' . ($a['times'] ?? 1) . '  ¥' . number_format($amt, 2)) . '　'; }
     $grand += $auxSum + $trtSum;
+    $insArr = json_decode((string)($rec['inspection'] ?? '[]'), true) ?: [];
+    $insLine = trim(implode('，', array_filter([
+        (string)($insArr['face'] ?? '') !== '' ? '面色' . $insArr['face'] : '',
+        (string)($insArr['tongue_body'] ?? '') !== '' ? '舌质' . $insArr['tongue_body'] : '',
+        (string)($insArr['tongue_coat'] ?? '') !== '' ? '舌苔' . $insArr['tongue_coat'] : '',
+    ])));
     header('Content-Type: text/html; charset=utf-8');
     echo '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>接诊单 #' . $e($vid) . '</title><style>
 @page { size: A4; margin: 18mm 16mm; }
@@ -1080,7 +1140,7 @@ pre { white-space: pre-wrap; font: inherit; }
 <h2>患者信息</h2>
 <table><tr><th>姓名</th><td>' . $e($p['name']) . '</td><th>性别</th><td>' . $e($p['gender']) . '</td><th>年龄</th><td>' . $e($p['age']) . '</td></tr>
 <tr><th>档案号</th><td>' . $e($p['archive_no']) . '</td><th>电话</th><td>' . $e($p['phone']) . '</td><th>挂号费</th><td>¥' . number_format((float)$p['reg_fee'], 2) . '</td></tr></table>
-<h2>病历</h2><pre>主诉：' . $e($rec['chief_complaint'] ?? '无') . "\n现病史：" . $e($rec['present_illness'] ?? '无') . "\n过敏史：" . $e($rec['allergy_history'] ?? '无') . "\n体格检查：" . $e($rec['physical_exam'] ?? '无') . "\n诊断：" . $e($rec['diagnosis'] ?? '无') . '</pre>
+<h2>病历</h2><pre>主诉：' . $e(strip_ai_note($rec['chief_complaint'] ?? '无')) . "\n现病史：" . $e(strip_ai_note($rec['present_illness'] ?? '无')) . "\n过敏史：" . $e(strip_ai_note($rec['allergy_history'] ?? '无')) . "\n体格检查：" . $e(strip_ai_note($rec['physical_exam'] ?? '无')) . ($insLine ? "\n望诊：" . $e($insLine) : '') . "\n诊断：" . $e(strip_ai_note($rec['diagnosis'] ?? '无')) . '</pre>
 ' . ($auxHtml ? '<h2>辅助检查</h2><p>' . $auxHtml . '</p>' : '') . '
 ' . ($trtHtml ? '<h2>治疗项目</h2><p>' . $trtHtml . '</p>' : '') . '
 ' . $rxHtml . '
@@ -1161,7 +1221,7 @@ case 'organize_transcript': {
 1. 去除语气词（嗯、啊、呃）、重复、寒暄与无关内容；
 {$stdRule}
 3. 保留所有医学信息，不得编造、不得遗漏症状/病程/诱因/伴随症/舌脉等；医学表述须符合教材规范；
-4. 末尾固定加一行："本整理由 AI 生成，请医生核对"。{$targetNote}{$dxNote}
+4. 不要在正文中加任何"AI 生成"之类的标注（免责声明由单据底部统一展示）。{$targetNote}{$dxNote}
 5. 只输出严格 JSON，不要任何解释文字：{"chief_complaint":"主诉文本","present_illness":"现病史文本","tcm_summary":"四诊摘要/体格检查要点文本"}
 
 # 口语转写
@@ -1180,9 +1240,9 @@ P;
         exit;
     }
     $out = [
-        'chief_complaint' => trim((string)$j['chief_complaint']),
-        'present_illness' => trim((string)($j['present_illness'] ?? '未提及')),
-        'tcm_summary'     => trim((string)($j['tcm_summary'] ?? '未提及')),
+        'chief_complaint' => trim(strip_ai_note((string)$j['chief_complaint'])),
+        'present_illness' => trim(strip_ai_note((string)($j['present_illness'] ?? '未提及'))),
+        'tcm_summary'     => trim(strip_ai_note((string)($j['tcm_summary'] ?? '未提及'))),
     ];
     ai_cache_set($ckOrg, $out);
     ok($out);
