@@ -42,7 +42,7 @@ button:disabled { opacity:.6; }
 <div class="wrap">
   <header>
     <a href="index.php" style="text-decoration:none"><div class="logo">福俭堂国医馆</div></a>
-    <p>就诊记录自助查询 · 仅显示最近 7 日</p>
+    <p>就诊记录自助查询 · 仅显示最近 7 日 · <a href="appointment.php" style="color:#00b578">📅 预约挂号</a></p>
     <a href="index.php" style="font-size:12px;color:#00b578;text-decoration:none">← 返回有医帮首页</a>
   </header>
 
