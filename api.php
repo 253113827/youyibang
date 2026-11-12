@@ -652,6 +652,80 @@ case 'appt_now': {
         FROM appointments WHERE visit_date=CURDATE()");
     ok(['current' => $cur ?: null, 'stats' => $st2->fetch() ?: []]);
 }
+/* AI 识别预约打印表：图片 → [{name, phone, period, slot}]（不落库，预览用） */
+case 'appt_import_parse': {
+    $doctor = trim($_POST['doctor'] ?? '');
+    if (empty($_FILES['img']) || $_FILES['img']['error'] !== UPLOAD_ERR_OK) fail('缺少图片');
+    $abs = $_FILES['img']['tmp_name'];
+    if (@getimagesize($abs) === false) fail('不是有效图片');
+    $data = base64_encode(file_get_contents($abs));
+    $ext = strtolower(pathinfo($_FILES['img']['name'], PATHINFO_EXTENSION));
+    $mime = $ext === 'png' ? 'image/png' : ($ext === 'webp' ? 'image/webp' : 'image/jpeg');
+    $prompt = "这是一张诊所预约登记表（纸质打印或手写）。请识别表格中每一位预约患者，输出严格 JSON：{\"list\":[{\"name\":\"会员姓名\",\"phone\":\"手机号\",\"period\":\"上午或下午\",\"time\":\"该患者时间段列的起始时间，如 09:00\"}]}。"
+        . "要求：1) 表格通常分【上午】【下午】两个区块，区块标题决定 period；若无法判断区块，按时间列判断（<12:00 为上午，>=12:00 为下午）。2) time 取时间段列（如 09:00-09:12）的开始时间，格式 HH:MM。3) 跳过划掉/涂黑的行。4) 手机号按 11 位数字识别，若模糊则按最可能的数字输出。5) 只输出 JSON，不要解释。";
+    $result = null; $err = '';
+    foreach ($LLM_ENDPOINTS as $ep) {
+        $ch = curl_init(rtrim($ep['base'], '/') . '/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 180,
+            CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $ep['key']],
+            CURLOPT_POSTFIELDS => json_encode([
+                'model' => $ep['model'],
+                'messages' => [['role' => 'user', 'content' => [
+                    ['type' => 'text', 'text' => $prompt],
+                    ['type' => 'image_url', 'image_url' => ['url' => "data:$mime;base64,$data"]],
+                ]]],
+            ], JSON_UNESCAPED_UNICODE),
+        ]);
+        $res = curl_exec($ch); $err = curl_error($ch); curl_close($ch);
+        if ($res !== false) {
+            $j = json_decode($res, true);
+            if (!empty($j['choices'][0]['message']['content'])) { $result = $j['choices'][0]['message']['content']; break; }
+        }
+    }
+    if ($result === null) fail('AI 识别失败：' . ($err ?: '模型不可用'), 502);
+    $s = strpos($result, '{'); $e = strrpos($result, '}');
+    $j = ($s !== false && $e !== false) ? json_decode(substr($result, $s, $e - $s + 1), true) : null;
+    if (!is_array($j) || empty($j['list'])) fail('AI 未能识别出预约行，请拍照清晰后重试');
+    $list = [];
+    foreach ($j['list'] as $r) {
+        $nm = trim((string)($r['name'] ?? ''));
+        $ph = preg_replace('/\D/', '', (string)($r['phone'] ?? ''));
+        $per = (($r['period'] ?? '') === '下午' || ($r['period'] ?? '') === '晚上') ? '下午' : '上午';
+        $tm = (string)($r['time'] ?? '');
+        if ($nm === '' || strlen($ph) < 7 || !preg_match('/^\d{1,2}:\d{2}$/', $tm)) continue;
+        $list[] = ['name' => $nm, 'phone' => substr($ph, 0, 11), 'period' => $per, 'time_slot' => sprintf('%02d:%02d', (int)substr($tm, 0, strpos($tm, ':')), (int)substr($tm, strpos($tm, ':') + 1))];
+    }
+    if (!$list) fail('AI 未能识别出有效预约行');
+    ok(['list' => $list]);
+}
+/* 导入确认落库：date+doctor+list（name/phone/period/time_slot），排号按时段顺序，重复跳过 */
+case 'appt_import_commit': {
+    $doctor = trim($_POST['doctor'] ?? '');
+    $date = trim($_POST['date'] ?? '');
+    $list = json_decode($_POST['list'] ?? '[]', true);
+    if (!$doctor || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !is_array($list) || !$list) fail('参数错误');
+    $okN = 0; $skip = []; $queues = [];
+    $stChk = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
+    $stMax = $pdo->prepare("SELECT IFNULL(MAX(queue_no),0) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=?");
+    $stIns = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    foreach ($list as $r) {
+        $nm = trim((string)($r['name'] ?? ''));
+        $ph = trim((string)($r['phone'] ?? ''));
+        $per = (($r['period'] ?? '') === '下午' || ($r['period'] ?? '') === '晚上') ? '下午' : '上午';
+        $slot = trim((string)($r['time_slot'] ?? ''));
+        if ($nm === '' || $ph === '' || $slot === '') continue;
+        $stChk->execute([$nm, $ph, $date]);
+        if ((int)$stChk->fetchColumn()) { $skip[] = $nm . '（当天已存在）'; continue; }
+        $stMax->execute([$doctor, $date, $per]);
+        $q = (int)$stMax->fetchColumn() + 1; $queues[$per] = $q;
+        $stIns->execute([$nm, '未知', '', $ph, '', '中医科', $doctor, $date, $per, $slot, $q, '导入']);
+        $okN++;
+    }
+    ok(['imported' => $okN, 'skipped' => $skip]);
+}
+
 /* 医生端代录预约（现场挂号/电话/复诊），可占用预留号 */
 case 'appt_admin_book': {
     $name = trim($_POST['name'] ?? '');

@@ -69,6 +69,7 @@ body { background:#f5f6f7; }
       <button class="btn outline sm" onclick="saveSlots()">💾 保存</button></div>
     <button class="btn outline-blue sm" onclick="showRemind()">📨 诊前提醒(明日)</button>
     <button class="btn primary sm" onclick="openAdminBook()">＋ 代录预约</button>
+    <button class="btn outline sm" style="border-color:#1565c0;color:#1565c0" onclick="openImport()">📥 导入预约(拍照识别)</button>
     <a class="btn outline sm" href="appointment.php" target="_blank">患者端</a>
   </div>
 
@@ -197,6 +198,59 @@ async function showRemind() {
 function copyRemind(t) {
   navigator.clipboard.writeText(t).then(() => alert('已复制，可粘贴到微信/短信发送'));
 }
+/* ===== 导入预约（拍照 AI 识别）===== */
+let _importList = [];
+function openImport() {
+  $('im_date').value = $('d').value;
+  _initDoctors().then(() => { $('im_doctor').value = '施宣赫'; });
+  $('im_file').value = ''; $('imStatus').textContent = ''; $('imPreview').innerHTML = '';
+  $('imCommitBtn').style.display = 'none'; _importList = [];
+  $('mImport').classList.add('show');
+}
+async function importParse(input) {
+  if (!input.files || !input.files[0]) return;
+  const st = $('imStatus'), pv = $('imPreview');
+  st.textContent = 'AI 识别中…（约 30-90 秒，识别完成后可核对再导入）';
+  pv.innerHTML = '';
+  $('imCommitBtn').style.display = 'none';
+  try {
+    const fd = new FormData();
+    fd.append('doctor', $('im_doctor').value);
+    fd.append('img', input.files[0]);
+    const r = await fetch(A + 'appt_import_parse', { method: 'POST', body: fd }); const j = await r.json();
+    if (!j.ok) { st.textContent = '❌ ' + (j.error || '识别失败'); return; }
+    _importList = j.list;
+    st.textContent = '✅ 识别出 ' + j.list.length + ' 条预约，请核对下方清单（时间段列已转为开始时间）后点「确认导入」';
+    const rows = j.list.map((x, i) => `<tr>
+      <td><input type="checkbox" checked onchange="window._importList[${i}]._skip = !this.checked"></td>
+      <td><input value="${esc(x.name)}" onchange="window._importList[${i}].name=this.value" style="width:80px;border:1px solid #ddd;border-radius:4px;padding:2px 4px;font:inherit"></td>
+      <td><input value="${esc(x.phone)}" onchange="window._importList[${i}].phone=this.value" style="width:110px;border:1px solid #ddd;border-radius:4px;padding:2px 4px;font:inherit"></td>
+      <td>${esc(x.period)}</td>
+      <td><input value="${esc(x.time_slot)}" onchange="window._importList[${i}].time_slot=this.value" style="width:60px;border:1px solid #ddd;border-radius:4px;padding:2px 4px;font:inherit"></td>
+    </tr>`).join('');
+    pv.innerHTML = '<table class="atab"><thead><tr><th>导入</th><th>姓名</th><th>手机号</th><th>时段</th><th>时间</th></tr></thead>' + rows + '</table>';
+    $('imCommitBtn').style.display = 'inline-block';
+  } catch (e) { st.textContent = '❌ 网络异常：' + e.message; }
+}
+async function importCommit() {
+  const list = _importList.filter(x => !x._skip).map(x => ({ name: x.name, phone: x.phone, period: x.period, time_slot: x.time_slot }));
+  if (!list.length) return alert('没有勾选任何行');
+  $('imCommitBtn').disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('doctor', $('im_doctor').value); fd.append('date', $('im_date').value);
+    fd.append('list', JSON.stringify(list));
+    const r = await fetch(A + 'appt_import_commit', { method: 'POST', body: fd }); const j = await r.json();
+    if (j.ok) {
+      let msg = '✅ 成功导入 ' + j.imported + ' 条预约';
+      if ((j.skipped || []).length) msg += '，跳过 ' + j.skipped.length + ' 条：' + j.skipped.join('、');
+      $('imStatus').textContent = msg;
+      $('imPreview').innerHTML = ''; $('imCommitBtn').style.display = 'none';
+      $('d').value = $('im_date').value; load();
+      if (typeof notifyAttention === "function") notifyAttention('预约导入完成');
+    } else { $('imStatus').textContent = '❌ ' + (j.error || '导入失败'); $('imCommitBtn').disabled = false; }
+  } catch (e) { $('imStatus').textContent = '❌ 网络异常'; $('imCommitBtn').disabled = false; }
+}
 loadSlots(); load();
 setInterval(load, 30000);
 </script>
@@ -219,6 +273,24 @@ setInterval(load, 30000);
     <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
       <button class="btn gray sm" onclick="document.getElementById('mAdmin').classList.remove('show')">取消</button>
       <button class="btn primary sm" onclick="submitAdminBook()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="mImport">
+  <div class="mbox">
+    <h3 style="font-size:16px;margin-bottom:10px">📥 导入预约（拍照识别打印表）</h3>
+    <div class="mgrid">
+      <label>预约日期 *<input id="im_date" type="date"></label>
+      <label>医生<select id="im_doctor"></select></label>
+    </div>
+    <label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">预约表照片（拍照或选择图片，AI 自动识别姓名/手机号/时间段）</label>
+    <label class="filebtn" style="background:var(--primary);border-radius:6px;padding:8px 14px;font-size:13px;display:inline-block;cursor:pointer">📷 拍照/选择图片<input type="file" id="im_file" accept="image/*" capture="environment" hidden onchange="importParse(this)"></label>
+    <div id="imStatus" style="font-size:12px;color:#8a6d1a;margin-top:8px"></div>
+    <div id="imPreview" style="max-height:40vh;overflow:auto;margin-top:8px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button class="btn gray sm" onclick="document.getElementById('mImport').classList.remove('show')">关闭</button>
+      <button class="btn primary sm" id="imCommitBtn" style="display:none" onclick="importCommit()">💾 确认导入</button>
     </div>
   </div>
 </div>
