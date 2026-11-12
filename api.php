@@ -492,14 +492,17 @@ case 'save_opd': {
     $tcmRaw = trim($_POST['tcm_checklist'] ?? '');
     $tcm = null;
     if ($tcmRaw !== '') { $tcmDec = json_decode($tcmRaw, true); if (is_array($tcmDec)) $tcm = json_encode($tcmDec, JSON_UNESCAPED_UNICODE); }
-    $pdo->prepare('INSERT INTO opd_records (visit_id, chief_complaint, present_illness, allergy_history, physical_exam, diagnosis, auxiliary_exam, treatments, notes, tcm_checklist)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+    /* 望诊（脸色/舌质/舌苔） */
+    $insDec = json_decode($_POST['inspection'] ?? '', true);
+    $ins = is_array($insDec) ? json_encode($insDec, JSON_UNESCAPED_UNICODE) : null;
+    $pdo->prepare('INSERT INTO opd_records (visit_id, chief_complaint, present_illness, allergy_history, physical_exam, diagnosis, auxiliary_exam, treatments, notes, tcm_checklist, inspection)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE chief_complaint=VALUES(chief_complaint), present_illness=VALUES(present_illness),
         allergy_history=VALUES(allergy_history), physical_exam=VALUES(physical_exam), diagnosis=VALUES(diagnosis),
-        auxiliary_exam=VALUES(auxiliary_exam), treatments=VALUES(treatments), notes=VALUES(notes), tcm_checklist=VALUES(tcm_checklist)')
+        auxiliary_exam=VALUES(auxiliary_exam), treatments=VALUES(treatments), notes=VALUES(notes), tcm_checklist=VALUES(tcm_checklist), inspection=VALUES(inspection)')
         ->execute([$vid, trim($_POST['chief_complaint'] ?? ''), trim($_POST['present_illness'] ?? ''),
                    trim($_POST['allergy_history'] ?? ''), trim($_POST['physical_exam'] ?? ''),
-                   trim($_POST['diagnosis'] ?? ''), $aux, $trt, trim($_POST['notes'] ?? ''), $tcm]);
+                   trim($_POST['diagnosis'] ?? ''), $aux, $trt, trim($_POST['notes'] ?? ''), $tcm, $ins]);
     if (!empty($_POST['rx_items'])) {
         $pdo->prepare('DELETE FROM prescriptions WHERE visit_id=?')->execute([$vid]);
         foreach (['western', 'chinese', 'infusion'] as $i => $t) {
@@ -805,6 +808,87 @@ case 'asr_full': {
     }
     error_log("[yyb-asrfull] FAIL visit={$vid} size=" . filesize($tmp) . " err=" . substr($err, 0, 300));
     fail('整段精转暂不可用：' . $err);
+}
+
+/* ===== 门诊检验报告：上传/AI 分析/列表/删除（复用 IMAGE_PROMPTS：面色/舌苔/化验单） ===== */
+case 'visit_upload': {
+    $vid = (int)($_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    $type = trim($_POST['type'] ?? '化验单');
+    if (!isset($IMAGE_PROMPTS[$type])) $type = '化验单';
+    if (empty($_FILES['files'])) fail('缺少文件');
+    $dir = __DIR__ . '/uploads/visit_' . $vid;
+    if (!is_dir($dir)) mkdir($dir, 0755, true);
+    $out = [];
+    foreach ($_FILES['files']['name'] as $i => $n) {
+        if ($_FILES['files']['error'][$i] !== UPLOAD_ERR_OK) continue;
+        $check = @getimagesize($_FILES['files']['tmp_name'][$i]);
+        if ($check === false) continue;
+        $tmp = $_FILES['files']['tmp_name'][$i];
+        $ext = strtolower(pathinfo($n, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'])) $ext = 'jpg';
+        $name = 'v' . $vid . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
+        if (!move_uploaded_file($tmp, $dir . '/' . $name)) continue;
+        $rel = 'uploads/visit_' . $vid . '/' . $name;
+        $pdo->prepare('INSERT INTO visit_images (visit_id, path, type) VALUES (?,?,?)')->execute([$vid, $rel, $type]);
+        $out[] = ['id' => (int)$pdo->lastInsertId(), 'path' => $rel, 'type' => $type];
+    }
+    if (!$out) fail('上传失败');
+    ok(['images' => $out]);
+}
+case 'visit_images': {
+    $vid = (int)($_GET['visit_id'] ?? $_POST['visit_id'] ?? 0);
+    check_visit($vid);
+    $st = $pdo->prepare('SELECT id, path, type, ai_result, created_at FROM visit_images WHERE visit_id=? ORDER BY id DESC');
+    $st->execute([$vid]);
+    ok(['images' => $st->fetchAll()]);
+}
+case 'visit_ai_image': {
+    $iid = (int)($_POST['id'] ?? 0);
+    $st = $pdo->prepare('SELECT * FROM visit_images WHERE id=?'); $st->execute([$iid]);
+    $img = $st->fetch(); if (!$img) fail('图片不存在', 404);
+    check_visit((int)$img['visit_id']);
+    $abs = __DIR__ . '/' . $img['path'];
+    if (!is_file($abs)) fail('文件丢失', 404);
+    $data = base64_encode(file_get_contents($abs));
+    $ext = strtolower(pathinfo($abs, PATHINFO_EXTENSION));
+    $mime = $ext === 'png' ? 'image/png' : ($ext === 'gif' ? 'image/gif' : ($ext === 'webp' ? 'image/webp' : 'image/jpeg'));
+    $prompt = (isset($IMAGE_PROMPTS[$img['type']]) ? $IMAGE_PROMPTS[$img['type']] : $IMAGE_PROMPTS['化验单'])
+        . "\n\n补充要求：这是门诊患者的" . $img['type'] . "照片，请结合门诊场景给出简明分析（要点式，≤300字），异常项单独标出。";
+    $result = null; $err = '';
+    foreach ($LLM_ENDPOINTS as $ep) {
+        $ch = curl_init(rtrim($ep['base'], '/') . '/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 180,
+            CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $ep['key']],
+            CURLOPT_POSTFIELDS => json_encode([
+                'model' => $ep['model'],
+                'messages' => [['role' => 'user', 'content' => [
+                    ['type' => 'text', 'text' => $prompt],
+                    ['type' => 'image_url', 'image_url' => ['url' => "data:$mime;base64,$data"]],
+                ]]],
+            ], JSON_UNESCAPED_UNICODE),
+        ]);
+        $res = curl_exec($ch); $err = curl_error($ch); curl_close($ch);
+        if ($res !== false) {
+            $j = json_decode($res, true);
+            if (!empty($j['choices'][0]['message']['content'])) { $result = $j['choices'][0]['message']['content']; break; }
+        }
+    }
+    if ($result === null) fail('AI 解析失败：' . ($err ?: '模型不可用'), 502);
+    $pdo->prepare('UPDATE visit_images SET ai_result=? WHERE id=?')->execute([$result, $iid]);
+    ok(['id' => $iid, 'ai_result' => $result]);
+}
+case 'visit_img_del': {
+    $iid = (int)($_POST['id'] ?? 0);
+    $st = $pdo->prepare('SELECT * FROM visit_images WHERE id=?'); $st->execute([$iid]);
+    $img = $st->fetch(); if (!$img) fail('图片不存在', 404);
+    check_visit((int)$img['visit_id']);
+    $abs = __DIR__ . '/' . $img['path'];
+    if (is_file($abs)) @unlink($abs);
+    $pdo->prepare('DELETE FROM visit_images WHERE id=?')->execute([$iid]);
+    ok(['deleted' => $iid]);
 }
 
 /* 处方安全审查：规则引擎（rules.php 配对表+过敏交叉）优先，AI 补充；warnings 带 source 字段 */

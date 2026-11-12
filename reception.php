@@ -347,6 +347,21 @@ table.rx .rowdel:hover { color:var(--danger); }
     <span>血压</span><input id="pe_bp" placeholder="105/90">mmhg
     <span>心率</span><input id="pe_hr" inputmode="numeric" placeholder="120">bpm
   </div></div></div>
+  <div class="frow2"><div class="flabel">望诊<small style="color:#bbb">（中医）</small></div><div class="fval"><div class="pe3">
+    <span>脸色</span><input id="in_face" placeholder="红润/苍白/萎黄/潮红" style="width:110px">
+    <span>舌质</span><input id="in_tb" placeholder="淡红/红绛/淡白/紫暗" style="width:110px">
+    <span>舌苔</span><input id="in_tc" placeholder="薄白/黄腻/白腻/少苔" style="width:110px">
+  </div></div></div>
+  <div class="frow2"><div class="flabel">检验报告<small style="color:#bbb">（拍照上传+AI 分析）</small></div><div class="fval">
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <select id="lab_type" style="border:1px solid #e8d99a;background:#fff;border-radius:3px;padding:2px 6px;font:inherit">
+        <option>化验单</option><option>面色</option><option>舌苔</option><option>其他</option>
+      </select>
+      <input type="file" id="lab_files" accept="image/*" multiple style="font-size:12px;max-width:200px">
+      <button class="btn outline-blue sm" onclick="labUpload()">📤 上传</button>
+    </div>
+    <div id="labList" style="margin-top:6px"></div>
+  </div></div>
   <div class="frow2"><div class="flabel">诊断</div><div class="fval"><textarea id="f_dx" rows="2" oninput="diagSearch(this.value)" placeholder="输入可联想诊断字典"></textarea></div></div>
   <div class="frow2"><div class="flabel">辅助检查<small style="color:#bbb">（自动计费）</small></div><div class="fval">
     <div id="auxRows"></div>
@@ -615,6 +630,10 @@ async function openVisit(vid) {
   $('f_cc').value = rec.chief_complaint || ''; $('f_pi').value = rec.present_illness || '';
   $('f_al').value = rec.allergy_history || p.allergy || '';
   peFill(rec.physical_exam || '');
+  try { const ins = JSON.parse(rec.inspection || '{}');
+    $('in_face').value = ins.face || ''; $('in_tb').value = ins.tongue_body || ''; $('in_tc').value = ins.tongue_coat || '';
+  } catch (e) {}
+  loadLabImages();
   $('f_dx').value = rec.diagnosis || ''; $('f_notes').value = rec.notes || '';
   window._aux = JSON.parse(rec.auxiliary_exam || '[]'); window._trt = JSON.parse(rec.treatments || '[]');
   tcmRestore(rec.tcm_checklist || null);
@@ -654,6 +673,11 @@ function opdForm() {
   fd.append('allergy_history', $('f_al').value); fd.append('physical_exam', peCompose());
   fd.append('diagnosis', $('f_dx').value); fd.append('notes', $('f_notes').value);
   fd.append('auxiliary_exam', JSON.stringify(window._aux || [])); fd.append('treatments', JSON.stringify(window._trt || []));
+  const ins = {};
+  if ($('in_face').value.trim()) ins.face = $('in_face').value.trim();
+  if ($('in_tb').value.trim()) ins.tongue_body = $('in_tb').value.trim();
+  if ($('in_tc').value.trim()) ins.tongue_coat = $('in_tc').value.trim();
+  fd.append('inspection', JSON.stringify(ins));
   fd.append('rx_items', JSON.stringify(collectRx()));
   const tcm = tcmCollect(); if (tcm) fd.append('tcm_checklist', JSON.stringify(tcm));
   return fd;
@@ -1072,6 +1096,48 @@ async function uploadRecording(blob, fullText) {
   } catch (e) {}
   return null;
 }
+/* ===== 检验报告：上传/AI 分析/删除 ===== */
+async function labUpload() {
+  if (!CUR.visit) return alert('未选择患者');
+  const files = document.getElementById('lab_files').files;
+  if (!files.length) return alert('请先选择图片');
+  const fd = new FormData();
+  fd.append('visit_id', CUR.visit);
+  fd.append('type', document.getElementById('lab_type').value);
+  for (const f of files) fd.append('files[]', f);
+  $('orgNote').textContent = '检验报告上传中…';
+  const r = await fetch(A + 'visit_upload', { method: 'POST', body: fd }); const j = await r.json();
+  if (j.ok) { $('lab_files').value = ''; loadLabImages(); $('orgNote').textContent = '检验报告已上传，点「AI 分析」识别'; }
+  else alert(j.error || '上传失败');
+}
+async function loadLabImages() {
+  if (!CUR.visit) return;
+  const r = await fetch(A + 'visit_images&visit_id=' + CUR.visit); const j = await r.json();
+  if (!j.ok) return;
+  $('labList').innerHTML = (j.images || []).map(x => `<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed #f0e6c8;flex-wrap:wrap">
+    <a href="${esc(x.path)}" target="_blank" style="flex:none"><img src="${esc(x.path)}" style="width:64px;height:64px;object-fit:cover;border-radius:4px"></a>
+    <div style="flex:1;min-width:180px">
+      <div style="font-size:12px;color:#8a6d1a">${esc(x.type)} · ${esc((x.created_at||'').slice(5,16))}
+        <button class="btn outline-blue sm" onclick="labAI(${x.id})">🤖 AI 分析</button>
+        <button class="btn gray sm" onclick="labDel(${x.id})">🗑</button></div>
+      <div id="labai_${x.id}" style="font-size:12px;color:#555;white-space:pre-wrap;margin-top:3px">${x.ai_result ? esc(x.ai_result).slice(0, 500) : ''}</div>
+    </div></div>`).join('') || '<p class="hint">暂无检验报告图片，拍照或选择文件后上传。</p>';
+}
+async function labAI(id) {
+  const el = document.getElementById('labai_' + id);
+  el.textContent = 'AI 识别中…（约 10-30 秒）';
+  const fd = new FormData(); fd.append('id', id);
+  const r = await fetch(A + 'visit_ai_image', { method: 'POST', body: fd }); const j = await r.json();
+  if (j.ok) { el.textContent = j.ai_result; notifyAttention('检验报告 AI 分析完成'); }
+  else { el.textContent = 'AI 解析失败：' + (j.error || '未知'); }
+}
+async function labDel(id) {
+  if (!confirm('确定删除该报告图片？')) return;
+  const fd = new FormData(); fd.append('id', id);
+  await fetch(A + 'visit_img_del', { method: 'POST', body: fd });
+  loadLabImages();
+}
+
 /* 完成提醒：铃声 + 振动 + 标题闪烁（手机后台/锁屏也能感知） */
 let _titleTimer = null, _ringAudio = null;
 /* 录音开始时调用：解锁铃声（手机浏览器要求用户手势内初始化音频） */
