@@ -65,7 +65,7 @@ body { background:#f5f6f7; }
   <div class="atop">
     <h1>📅 预约管理</h1>
     <input type="date" id="d" value="<?= date('Y-m-d') ?>" onchange="load()">
-    <div class="slots">预留号/时段 <input id="rv" type="number" min="0" max="20">（每时段末尾 N 格为预留，仅到店/电话/代录可用；总量与时段在医生出诊表中配置） <button class="btn outline sm" onclick="saveSlots()">💾 保存</button></div>
+    <div class="slots" hidden>预留设置（已停用）<input id="rv" type="number" value="0"></div>
     <button class="btn outline-blue sm" onclick="showRemind()">📨 诊前提醒(明日)</button>
     <button class="btn primary sm" onclick="openAdminBook()">＋ 代录预约</button>
     <button class="btn outline sm" style="border-color:#1565c0;color:#1565c0" onclick="openImport()">📥 导入预约(拍照识别)</button>
@@ -262,7 +262,7 @@ setInterval(load, 30000);
 
 <div class="modal" id="mAdmin">
   <div class="mbox">
-    <h3 style="font-size:16px;margin-bottom:10px">＋ 代录预约（现场/电话/复诊，可用预留号）</h3>
+    <h3 style="font-size:16px;margin-bottom:10px">＋ 代录预约（现场/电话/复诊）</h3>
     <div class="mgrid">
       <label>姓名 *<input id="ab_name"></label>
       <label>电话 *<input id="ab_phone" inputmode="tel"></label>
@@ -272,7 +272,7 @@ setInterval(load, 30000);
       <label>时段<select id="ab_period" onchange="_loadAbSlots()"><option>上午</option><option>下午</option></select></label>
       <label>来源<select id="ab_src"><option>现场</option><option>电话</option><option>复诊</option></select></label>
     </div>
-    <label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">选择时间段（虚线橙框=预留号）</label>
+    <label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">选择时间段</label>
     <div id="abSlotGrid" style="display:flex;flex-wrap:wrap;gap:6px"></div>
     <input type="hidden" id="ab_slot">
     <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">

@@ -570,7 +570,7 @@ case 'appt_slots_view': {
                     if ($phone !== '' && $r1['phone'] === $phone) $mine = true;
                 }
             }
-            $isReserved = $reserve > 0 && $idx >= $nSlots - $reserve;
+            $isReserved = false; /* 已取消预留号机制，全部格子开放预约 */
             if (!$isReserved && $usedCnt < $capacity) $bookable['left'] += $capacity - $usedCnt;
             $out[] = ['period' => $period, 'slot' => $slot, 'taken' => $usedCnt, 'capacity' => $capacity, 'full' => $usedCnt >= $capacity, 'reserved' => $isReserved, 'mine' => $mine];
             $idx++;
@@ -616,13 +616,6 @@ case 'appt_book': {
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period, $slot]);
     if ((int)$st->fetchColumn() >= $perSlotCap) fail('该时间段已约满，请选择相邻时间');
-    /* 预留号患者不可自约 */
-    $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
-    if ($reserve > 0) {
-        $s0min = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
-        $idx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - $s0min, 10);
-        if ($idx >= $nSlots - $reserve) fail('该时间为预留号（到店挂号/电话预约可用），请选择其他时间');
-    }
     /* 同人同日去重 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$name, $phone, $date]);
