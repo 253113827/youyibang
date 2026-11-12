@@ -142,8 +142,28 @@ async function initDoctors() {
     sel.innerHTML = '';
     _doctors.forEach(d => { const o = document.createElement('option'); o.value = d.name; o.textContent = d.name + ' · ' + (d.dept || ''); sel.appendChild(o); });
     $('b_doctor').onchange = () => { syncPeriods(); loadSlots(); };
+    initDates();
     syncPeriods();
   } catch (e) {}
+}
+/* 日期下拉：近两周内该医生有门诊的日期（周五/周日），option 带时段摘要 */
+function initDates() {
+  const sel = $('b_date');
+  sel.innerHTML = '';
+  const week = doctorWeek();
+  const wd = ['周日','周一','周二','周三','周四','周五','周六'];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(); d.setDate(d.getDate() + i);
+    const wdNum = d.getDay();
+    const sessions = week[String(wdNum)] || [];
+    if (!sessions.length) continue;
+    const ds = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    const summary = sessions.map(s => s.p).join('/');
+    const o = document.createElement('option');
+    o.value = ds;
+    o.textContent = (i === 0 ? '今天 ' : i === 1 ? '明天 ' : '') + wd[wdNum] + ' ' + ds.slice(5) + '（' + summary + '）';
+    sel.appendChild(o);
+  }
 }
 function doctorWeek() {
   const d = _doctors.find(x => x.name === $('b_doctor').value);
