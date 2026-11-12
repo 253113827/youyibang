@@ -615,6 +615,7 @@ async function openVisit(vid) {
   const r = await fetch(A + 'get_opd&visit_id=' + vid); const j = await r.json();
   if (!j.ok) { alert(j.error || '加载失败'); return; }
   CUR.visit = vid; CUR.patient = j.patient; CUR.record = j.record; CUR.rx = j.prescriptions || {};
+  window._rxDoses = { chinese: (CUR.rx.chinese && CUR.rx.chinese.doses) || 7 }; /* 中药剂数（整方属性，默认 7 剂） */
   const p = j.patient;
   $('ptbar').innerHTML = `<span class="gavic">${p.gender === '女' ? '♀' : '♂'}</span><b>${esc(p.name)}</b>
     <span class="meta">${esc(p.gender)} · ${esc(p.age)}岁 · ${esc(p.phone || p.archive_no || '')}</span>
@@ -663,7 +664,11 @@ function peFill(txt) {
 function collectRx() {
   const out = [];
   for (const t of ['western', 'infusion', 'chinese']) {
-    (window['_rx_' + t] || []).forEach(it => out.push(Object.assign({ type: t }, it)));
+    (window['_rx_' + t] || []).forEach(it => {
+      const copy = Object.assign({ type: t }, it);
+      if (t === 'chinese') copy.doses = (window._rxDoses && window._rxDoses.chinese) || 7; /* 剂数随首味上传，后端提取为整方属性 */
+      out.push(copy);
+    });
   }
   return out;
 }
@@ -757,8 +762,12 @@ function stepDose(t, i, key, d) {
 function rxSheet(t) {
   const items = window['_rx_' + t] || (window['_rx_' + t] = []);
   const sub = items.reduce((s, it) => s + (+it.price || 0) * (+it.qty || 0), 0);
+  const dosesHtml = t === 'chinese'
+    ? `<label style="font-size:12px;color:#8a6d1a;display:flex;align-items:center;gap:3px">剂数<input type="number" min="1" max="100" value="${(window._rxDoses && window._rxDoses.chinese) || 7}" onchange="window._rxDoses=window._rxDoses||{};window._rxDoses.chinese=Math.max(1,parseInt(this.value)||7)" style="width:46px;padding:2px 4px;border:1px solid #e8d99a;border-radius:4px;font:inherit;text-align:center"></label>`
+    : '';
   return `<div class="rxsheet" id="sheet_${t}">
     <div class="hd"><span class="rxtag">${RX_TITLE[t].replace('处方','')}</span><span class="free">已免费</span>
+      ${dosesHtml}
       <button class="btn outline sm addrow" onclick="addRxRow('${t}')">＋ 添加药行</button>
       <span class="rxsub">小计 ¥${sub.toFixed(2)}</span></div>
     ${rxTable(t, items)}
@@ -767,7 +776,7 @@ function rxSheet(t) {
 }
 function rxTable(t, items) {
   if (t === 'chinese') {
-    return `<table class="rx"><tr><th>序号</th><th>药名</th><th>剂量(g)</th><th>炮制</th><th>特殊煎法</th><th>单价</th><th>金额</th><th></th></tr>${
+    return `<table class="rx"><tr><th>序号</th><th>药名</th><th>克数</th><th>炮制</th><th>特殊煎法</th><th>单价</th><th>金额</th><th></th></tr>${
       items.map((it, i) => `<tr><td>${i + 1}</td>
       <td><input value="${esc(it.name ?? '')}" onchange="window._rx_chinese[${i}].name=this.value"></td>
       <td>${stepHtml('chinese', i, 'qty', 'qty_unit', QTY_UNITS.chinese)}</td>

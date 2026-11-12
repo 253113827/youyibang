@@ -452,16 +452,24 @@ case 'patient_self_query': {
     $visits = $st->fetchAll();
     $out = [];
     foreach ($visits as $v) {
-        $rst = $pdo->prepare('SELECT type, items FROM prescriptions WHERE visit_id=? ORDER BY id');
+        $rst = $pdo->prepare('SELECT type, items, doses FROM prescriptions WHERE visit_id=? ORDER BY id');
         $rst->execute([$v['id']]);
         $rxs = [];
         foreach ($rst->fetchAll() as $r) {
             $items = json_decode((string)$r['items'], true) ?: [];
             $names = [];
             foreach ($items as $it) {
-                $names[] = ($it['name'] ?? '') . (isset($it['qty_g']) ? ' ' . ($it['qty_g'] ?? '') . 'g' : (isset($it['dose']) ? ' ' . ($it['dose'] ?? '') : ''));
+                if ($r['type'] === 'chinese') {
+                    $names[] = ($it['name'] ?? '') . (($it['prep'] ?? '') ? '（' . $it['prep'] . '）' : '') . ' ' . ($it['qty'] ?? '') . 'g' . (($it['decoct'] ?? '') ? '，' . $it['decoct'] : '');
+                } else {
+                    $names[] = ($it['name'] ?? '') . (isset($it['dose']) ? ' ' . ($it['dose'] ?? '') : '');
+                }
             }
-            if ($names) $rxs[] = ['type' => $r['type'], 'items' => $names];
+            if ($names) {
+                $rxName = ['western' => '西药处方', 'chinese' => '中药处方', 'infusion' => '输液处方'][$r['type']] ?? $r['type'];
+                if ($r['type'] === 'chinese' && (int)($r['doses'] ?? 0) > 0) $rxName .= '（×' . (int)$r['doses'] . '剂）';
+                $rxs[] = ['type' => $r['type'], 'label' => $rxName, 'items' => $names];
+            }
         }
         $ins = json_decode((string)($v['inspection'] ?? '[]'), true) ?: [];
         $ist = $pdo->prepare('SELECT path, type, ai_result FROM visit_images WHERE visit_id=? ORDER BY id');
@@ -631,10 +639,17 @@ case 'save_opd': {
         foreach (['western', 'chinese', 'infusion'] as $i => $t) {
             $items = array_values(array_filter($rx, fn($x) => ($x['type'] ?? 'western') === $t));
             if (!$items) continue;
+            $doses = null;
+            if ($t === 'chinese') {
+                /* 中药剂数为整方属性：取首味携带的 doses，并从逐味 items 中剔除 */
+                $doses = isset($items[0]['doses']) ? max(1, (int)$items[0]['doses']) : null;
+                foreach ($items as &$it) unset($it['doses']);
+                unset($it);
+            }
             $t_total = 0.0;
             foreach ($items as $it) $t_total += (float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0);
-            $pdo->prepare('INSERT INTO prescriptions (visit_id, type, items, total) VALUES (?,?,?,?)')
-                ->execute([$vid, $t, json_encode($items, JSON_UNESCAPED_UNICODE), $t_total]);
+            $pdo->prepare('INSERT INTO prescriptions (visit_id, type, items, doses, total) VALUES (?,?,?,?,?)')
+                ->execute([$vid, $t, json_encode($items, JSON_UNESCAPED_UNICODE), $doses, $t_total]);
         }
     }
     $pdo->prepare("UPDATE visits SET status = IF(status='waiting','in_visit',status) WHERE id=?")->execute([$vid]);
@@ -1146,7 +1161,7 @@ case 'print_opd': {
     $p = $st->fetch();
     $st = $pdo->prepare('SELECT * FROM opd_records WHERE visit_id=?'); $st->execute([$vid]);
     $rec = $st->fetch() ?: [];
-    $st = $pdo->prepare('SELECT type, items, total FROM prescriptions WHERE visit_id=? ORDER BY id'); $st->execute([$vid]);
+    $st = $pdo->prepare('SELECT type, items, doses, total FROM prescriptions WHERE visit_id=? ORDER BY id'); $st->execute([$vid]);
     $rx = $st->fetchAll();
     $e = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
     $typeCn = ['western' => '西药处方', 'chinese' => '中药处方', 'infusion' => '输液处方'];
@@ -1159,10 +1174,13 @@ case 'print_opd': {
             $grand += (float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0);
             $isTcm = $r['type'] === 'chinese';
             if ($isTcm) {
-                /* 中药饮片：名称+炮制+克数+特殊煎法 */
+                /* 中药饮片：名称+炮制+克数+特殊煎法+剂数（整方统一）
+                 * 存储格式：qty=克数(qty_unit=g)；剂数在 prescriptions.doses；兼容旧 qty_g 字段 */
+                $grams = $it['qty_g'] ?? (($it['qty_unit'] ?? 'g') === 'g' ? ($it['qty'] ?? '') : ($it['dose'] ?? ''));
+                $doses = (int)($r['doses'] ?? 0) > 0 ? (int)$r['doses'] : (int)($it['doses'] ?? 0);
                 $detail = $e($it['name'] ?? '') . (($it['prep'] ?? '') ? '（' . $e($it['prep']) . '）' : '')
-                    . '</td><td>' . $e(($it['qty_g'] ?? $it['dose'] ?? '') . 'g' . (($it['decoct'] ?? '') ? '，' . $e($it['decoct']) : ''))
-                    . '</td><td>' . $e(($it['qty'] ?? '') ? '×' . $it['qty'] . '剂' : '') . '</td><td>' . number_format((float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0), 2);
+                    . '</td><td>' . $e($grams . 'g' . (($it['decoct'] ?? '') ? '，' . $e($it['decoct']) : ''))
+                    . '</td><td>' . ($doses > 0 ? '×' . $doses . '剂' : '') . '</td><td>' . number_format((float)($it['price'] ?? 0) * (float)($it['qty'] ?? 0) * max(1, $doses), 2);
                 $rows .= '<tr><td>' . ($i + 1) . '</td><td>' . $detail . '</td></tr>';
             } else {
                 $spec = (string)($it['spec'] ?? '');

@@ -103,7 +103,7 @@ function render(name, visits) {
     if (insLine) html += '<dt>望诊</dt><dd>' + esc(insLine) + '</dd>';
     if (v.notes) html += '<dt>医嘱</dt><dd>' + esc(v.notes) + '</dd>';
     for (const rx of (v.prescriptions || [])) {
-      html += '<div class="rx"><b>' + esc(rxType(rx.type)) + '</b>：' + esc((rx.items || []).join('、')) + '</div>';
+      html += '<div class="rx"><b>' + esc(rx.label || rxType(rx.type)) + '</b>：' + esc((rx.items || []).join('、')) + '</div>';
     }
     for (const ph of (v.photos || [])) {
       html += '<div class="rx" style="display:flex;gap:10px;align-items:flex-start">'
