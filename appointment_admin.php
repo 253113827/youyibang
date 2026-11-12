@@ -66,7 +66,7 @@ body { background:#f5f6f7; }
     <h1>📅 预约管理</h1>
     <input type="date" id="d" value="<?= date('Y-m-d') ?>" onchange="load()">
     <div class="slots" hidden>预留设置（已停用）<input id="rv" type="number" value="0"></div>
-    <button class="btn outline-blue sm" onclick="showRemind()">📨 诊前提醒(明日)</button>
+    <button class="btn outline-blue sm" onclick="showRemind()">📨 诊前提醒</button>
     <button class="btn primary sm" onclick="openAdminBook()">＋ 代录预约</button>
     <button class="btn outline sm" style="border-color:#1565c0;color:#1565c0" onclick="openImport()">📥 导入预约(拍照识别)</button>
     <a class="btn outline sm" href="appointment.php" target="_blank">患者端</a>
@@ -78,7 +78,7 @@ body { background:#f5f6f7; }
 
   <table class="atab">
     <thead><tr><th>排号</th><th>患者</th><th>性别/年龄</th><th>电话</th><th>医生/时段</th><th>科室</th><th>挂号费</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
-    <tbody id="tbody"><tr><td colspan="8" style="color:#99a1ad">加载中…</td></tr></tbody>
+    <tbody id="tbody"><tr><td colspan="10" style="color:#99a1ad">加载中…</td></tr></tbody>
   </table>
 </div>
 
@@ -153,8 +153,23 @@ function _openAb(pre) {
   $('ab_date').value = _abCtx.date = $('d').value;
   $('ab_slot').value = ''; $('abSlotGrid').innerHTML = '<span style="font-size:12px;color:#bbb">选择时段后显示</span>';
   $('mAdmin').classList.add('show');
-  setTimeout(() => $('ab_doctor').value = '施宣赫', 0);
-  _loadAbSlots();
+  _initDoctors().then(() => {
+    const s = $('ab_doctor'); s.value = '施宣赫'; if (!s.value) s.selectedIndex = 0;
+    _syncAbPeriods(); _loadAbSlots();
+  });
+}
+/* 按所选医生+日期的出诊配置动态生成时段选项（上午/下午/晚上） */
+async function _syncAbPeriods() {
+  const fd = new FormData();
+  fd.append('doctor', $('ab_doctor').value); fd.append('date', $('ab_date').value);
+  try {
+    const j = await fetch(A + 'appt_slots_view', { method: 'POST', body: fd }).then(r => r.json());
+    const sel = $('ab_period'), old = sel.value;
+    sel.innerHTML = (j.ok && j.sessions && j.sessions.length)
+      ? j.sessions.map(s => `<option>${esc(s.period)}</option>`).join('')
+      : '<option value="">当日无门诊</option>';
+    if ([...sel.options].some(o => o.value === old)) sel.value = old;
+  } catch (e) {}
 }
 function _loadAbSlots() {
   _abCtx.doctor = $('ab_doctor').value; _abCtx.period = $('ab_period').value; _abCtx.date = $('ab_date').value;
@@ -175,14 +190,24 @@ function _pickAb(btn) {
   $('ab_slot').value = btn.dataset.slot;
 }
 async function submitAdminBook() {
+  if (!$('ab_name').value.trim()) return alert('请填写姓名');
+  if (!$('ab_phone').value.trim()) return alert('请填写电话');
+  if (!$('ab_slot').value) return alert('请选择时间段');
+  const btn = event && event.target;
+  if (btn) btn.disabled = true;
   const fd = new FormData();
   ['name', 'phone', 'id_card', 'doctor', 'date', 'period', 'time_slot'].forEach(k => {
     const map = { name: 'ab_name', phone: 'ab_phone', id_card: 'ab_idc', doctor: 'ab_doctor', date: 'ab_date', period: 'ab_period', time_slot: 'ab_slot' };
     fd.append(k, $(map[k]).value);
   });
+  fd.append('gender', $('ab_gender').value);
+  fd.append('age', $('ab_age').value);
   fd.append('source', $('ab_src').value);
-  const r = await fetch(A + 'appt_admin_book', { method: 'POST', body: fd }); const j = await r.json();
-  if (j.ok) { $('mAdmin').classList.remove('show'); load(); } else alert(j.error || '失败');
+  try {
+    const r = await fetch(A + 'appt_admin_book', { method: 'POST', body: fd }); const j = await r.json();
+    if (j.ok) { $('mAdmin').classList.remove('show'); $('ab_name').value = $('ab_phone').value = $('ab_age').value = ''; $('ab_slot').value = ''; load(); }
+    else alert(j.error || '失败');
+  } finally { if (btn) btn.disabled = false; }
 }
 async function showRemind() {
   const r = await fetch(A + 'appt_remind_list&date=' + $('d').value); const j = await r.json();
@@ -194,6 +219,7 @@ async function showRemind() {
       <span style="color:#1565c0">${esc(a.visit_date)} ${esc(a.time_period)} ${esc(a.time_slot || '')} ${esc(a.doctor)} 第${a.queue_no}号</span>
       <button class="btn outline sm" onclick="copyRemind(this.dataset.t)" data-t="${esc(`【福俭堂国医馆】${a.name}您好，您已预约 ${a.visit_date} ${a.time_period} ${a.time_slot || ''} ${a.doctor}医生门诊（第${a.queue_no}号）。就诊以现场叫号顺序为准，预约时间不等于就诊时间，请提前15分钟到店。地址可导航“福俭堂国医馆”。`)}">📋 复制短信</button>
     </div>`).join('') : '<p style="color:#99a1ad;font-size:13px">该日期无待提醒预约</p>';
+  $('remindDate').textContent = $('d').value;
   $('mRemind').classList.add('show');
 }
 function copyRemind(t) {
@@ -267,9 +293,11 @@ setInterval(load, 30000);
       <label>姓名 *<input id="ab_name"></label>
       <label>电话 *<input id="ab_phone" inputmode="tel"></label>
       <label class="full">身份证号<input id="ab_idc"></label>
-      <label>医生<select id="ab_doctor" onchange="_loadAbSlots()"></select></label>
-      <label>日期<input id="ab_date" type="date" onchange="_loadAbSlots()"></label>
-      <label>时段<select id="ab_period" onchange="_loadAbSlots()"><option>上午</option><option>下午</option></select></label>
+      <label>医生<select id="ab_doctor" onchange="_syncAbPeriods();_loadAbSlots()"></select></label>
+      <label>日期<input id="ab_date" type="date" onchange="_syncAbPeriods();_loadAbSlots()"></label>
+      <label>时段<select id="ab_period" onchange="_loadAbSlots()"></select></label>
+      <label>性别<select id="ab_gender"><option>未知</option><option>男</option><option>女</option></select></label>
+      <label>年龄<input id="ab_age" inputmode="numeric"></label>
       <label>来源<select id="ab_src"><option>现场</option><option>电话</option><option>复诊</option></select></label>
     </div>
     <label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">选择时间段</label>
