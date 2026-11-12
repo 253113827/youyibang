@@ -552,15 +552,17 @@ case 'appt_slots_view': {
         $cap = max(1, (int)($ses['cap'] ?? 15));
         $s0 = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
         $s1 = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2);
-        $nSlots = max(1, intdiv($s1 - $s0, 30));
-        $perSlot = intdiv($cap, $nSlots); $extra = $cap % $nSlots;
+        /* 每人一格：格子时长 = 时段时长/容量（如下午 180 分钟 15 人 → 12 分钟格） */
+        $slotMin = max(1, intdiv($s1 - $s0, $cap));
+        $nSlots = max(1, intdiv($s1 - $s0, $slotMin));
         $booked = 0;
         foreach ($rowsAll as $r0) if ($r0['time_period'] === $period) $booked++;
-        $sessions[] = ['period' => $period, 'start' => $ses['s'], 'end' => $ses['e'], 'cap' => $cap, 'booked' => $booked];
+        $bookable = ['period' => $period, 'start' => $ses['s'], 'end' => $ses['e'], 'cap' => $cap, 'booked' => $booked, 'left' => 0];
         $idx = 0;
-        for ($t = $s0; $t < $s1; $t += 30, $idx++) {
-            $slot = sprintf('%02d:%02d', intdiv($t, 60), $t % 60);
-            $capacity = $perSlot + ($idx < $extra ? 1 : 0);
+        while ($idx < $nSlots) {
+            $tCur = $s0 + $idx * $slotMin;
+            $slot = sprintf('%02d:%02d', intdiv($tCur, 60), $tCur % 60);
+            $capacity = 1;
             $usedCnt = 0; $mine = false;
             foreach ($rowsAll as $r1) {
                 if ($r1['time_period'] === $period && $r1['time_slot'] === $slot) {
@@ -569,8 +571,11 @@ case 'appt_slots_view': {
                 }
             }
             $isReserved = $reserve > 0 && $idx >= $nSlots - $reserve;
+            if (!$isReserved && $usedCnt < $capacity) $bookable['left'] += $capacity - $usedCnt;
             $out[] = ['period' => $period, 'slot' => $slot, 'taken' => $usedCnt, 'capacity' => $capacity, 'full' => $usedCnt >= $capacity, 'reserved' => $isReserved, 'mine' => $mine];
+            $idx++;
         }
+        $sessions[] = $bookable;
     }
     ok(['slots' => $out, 'sessions' => $sessions, 'wd' => $wd, 'reserve' => $reserve]);
 }
@@ -607,14 +612,15 @@ case 'appt_book': {
     /* 该格子容量校验 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period, $slot]);
-    $nSlots = max(1, intdiv(((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2)), 30));
-    $perSlotCap = intdiv($cap, $nSlots) + 1; /* 容量上限取上限值 */
+    $dur = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2));
+    $nSlots = max(1, intdiv($dur, max(1, intdiv($dur, $cap)))); /* 每人一格 */
+    $perSlotCap = 1; /* 每格 1 人（与预约表 12 分钟粒度一致） */
     if ((int)$st->fetchColumn() >= $perSlotCap) fail('该时间段已约满，请选择相邻时间');
     /* 预留号患者不可自约 */
     $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
     if ($reserve > 0) {
         $s0min = ((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2);
-        $idx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - $s0min, 30);
+        $idx = intdiv(((int)substr($slot, 0, 2)) * 60 + (int)substr($slot, 3, 2) - $s0min, max(1, intdiv($dur, $cap)));
         if ($idx >= $nSlots - $reserve) fail('该时间为预留号（到店挂号/电话预约可用），请选择其他时间');
     }
     /* 同人同日去重 */
@@ -706,6 +712,14 @@ case 'appt_import_commit': {
     $date = trim($_POST['date'] ?? '');
     $list = json_decode($_POST['list'] ?? '[]', true);
     if (!$doctor || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !is_array($list) || !$list) fail('参数错误');
+    /* 读医生出诊配置：校验时段合法性（非法/超出时段的行跳过并提示） */
+    $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
+    $docSes = [];
+    foreach ($cfg as $d0) if (($d0['name'] ?? '') === $doctor) {
+        $wd = (int)date('w', strtotime($date));
+        foreach (($d0['week'][(string)$wd] ?? []) as $s0) $docSes[$s0['p']] = [$s0['s'], $s0['e']];
+        break;
+    }
     $okN = 0; $skip = []; $queues = [];
     $stChk = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
     $stMax = $pdo->prepare("SELECT IFNULL(MAX(queue_no),0) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=?");
@@ -716,6 +730,11 @@ case 'appt_import_commit': {
         $per = (($r['period'] ?? '') === '下午' || ($r['period'] ?? '') === '晚上') ? '下午' : '上午';
         $slot = trim((string)($r['time_slot'] ?? ''));
         if ($nm === '' || $ph === '' || $slot === '') { $skip[] = ($nm ?: '未知名') . '（信息不完整）'; continue; }
+        if (!preg_match('/^\d{2}:\d{2}$/', $slot)) { $skip[] = $nm . '（时间格式无效）'; continue; }
+        if ($docSes && (!isset($docSes[$per]) || $slot < $docSes[$per][0] || $slot >= $docSes[$per][1])) {
+            $skip[] = $nm . '（' . $slot . ' 不在' . $per . '门诊时段' . (isset($docSes[$per]) ? ' ' . $docSes[$per][0] . '-' . $docSes[$per][1] : '') . '内）';
+            continue;
+        }
         $stChk->execute([$nm, $ph, $date]);
         if ((int)$stChk->fetchColumn()) { $skip[] = $nm . '（当天已存在）'; continue; }
         $stMax->execute([$doctor, $date, $per]);
@@ -764,10 +783,27 @@ case 'appt_admin_book': {
     $source = in_array($_POST['source'] ?? '', ['现场', '电话', '复诊']) ? $_POST['source'] : '现场';
     if ($name === '' || $phone === '' || !$doctor || $slot === '') fail('缺少必要信息');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('日期格式错误');
-    /* 格子占用校验（同上，但允许占用预留格） */
+    /* 容量校验：与患者端 appt_slots_view 规则一致（时段总容量 + 单格容量，预留格可占） */
+    $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
+    $doc = null;
+    foreach ($cfg as $d0) if (($d0['name'] ?? '') === $doctor) { $doc = $d0; break; }
+    if (!$doc) fail('医生不存在');
+    $wd = (int)date('w', strtotime($date));
+    $daySessions = $doc['week'][(string)$wd] ?? [];
+    $ses = null;
+    foreach ($daySessions as $s0) if (($s0['p'] ?? '') === $period) { $ses = $s0; break; }
+    if (!$ses) fail($doctor . ' 当日' . $period . '无门诊');
+    if ($slot < $ses['s'] || $slot >= $ses['e']) fail('所选时间不在 ' . $ses['s'] . '-' . $ses['e'] . ' 内');
+    $cap = max(1, (int)($ses['cap'] ?? 15));
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period]);
+    if ((int)$st->fetchColumn() >= $cap) fail($period . '号已约满（共 ' . $cap . ' 个）');
+    $dur = ((int)substr($ses['e'], 0, 2)) * 60 + (int)substr($ses['e'], 3, 2) - (((int)substr($ses['s'], 0, 2)) * 60 + (int)substr($ses['s'], 3, 2));
+    $nSlots = max(1, intdiv($dur, max(1, intdiv($dur, $cap)))); /* 每人一格 */
+    $perSlotCap = 1;
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period, $slot]);
-    if ((int)$st->fetchColumn()) fail('该时间段已被占用');
+    if ((int)$st->fetchColumn() >= $perSlotCap) fail('该时间段已约满（容量 ' . $perSlotCap . '），请选相邻时间');
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$name, $phone, $date]);
     if ((int)$st->fetchColumn()) fail('该患者当天已有预约');
@@ -787,8 +823,11 @@ case 'appt_admin_list': {
 }
 case 'appt_call': {
     $id = (int)($_POST['id'] ?? 0);
-    $st = $pdo->prepare("UPDATE appointments SET status='called', called_at=NOW() WHERE id=?");
+    $st = $pdo->prepare("SELECT status FROM appointments WHERE id=?");
     $st->execute([$id]);
+    $cur = (string)$st->fetchColumn();
+    if (!in_array($cur, ['pending'], true)) fail('该预约当前为「' . ($cur ?: '不存在') . '」，不能叫号');
+    $pdo->prepare("UPDATE appointments SET status='called', called_at=NOW() WHERE id=?")->execute([$id]);
     ok(['called' => $id]);
 }
 case 'appt_set_status': {
@@ -796,9 +835,7 @@ case 'appt_set_status': {
     $s = $_POST['status'] ?? '';
     $map = ['in_visit' => 'in_visit', 'done' => 'done', 'cancelled' => 'cancelled', 'noshow' => 'noshow', 'pending' => 'pending'];
     if (!isset($map[$s])) fail('状态错误');
-    $extra = in_array($s, ['done', 'noshow', 'cancelled']) ? ', finished_at=NOW()' : '';
-    $pdo->prepare("UPDATE appointments SET status=?" . ($s === 'pending' ? ', called_at=NULL' : '') . " " . ($s !== 'pending' ? '' : '') . " WHERE id=?")->execute([$s, $id]);
-    if (in_array($s, ['done', 'noshow', 'cancelled'])) $pdo->prepare("UPDATE appointments SET finished_at=NOW() WHERE id=?")->execute([$id]);
+    $pdo->prepare("UPDATE appointments SET status=?, finished_at=IF(? IN ('done','noshow','cancelled'), NOW(), finished_at) WHERE id=?")->execute([$s, $s, $id]);
     ok(['updated' => $id, 'status' => $s]);
 }
 /* 诊前提醒：某日期的预约清单（默认明天），供短信/微信提醒 */

@@ -65,8 +65,7 @@ body { background:#f5f6f7; }
   <div class="atop">
     <h1>📅 预约管理</h1>
     <input type="date" id="d" value="<?= date('Y-m-d') ?>" onchange="load()">
-    <div class="slots">号源：上午 <input id="am" type="number" min="1" max="50"> 下午 <input id="pm" type="number" min="1" max="50"> 预留 <input id="rv" type="number" min="0" max="20">
-      <button class="btn outline sm" onclick="saveSlots()">💾 保存</button></div>
+    <div class="slots">预留号/时段 <input id="rv" type="number" min="0" max="20">（每时段末尾 N 格为预留，仅到店/电话/代录可用；总量与时段在医生出诊表中配置） <button class="btn outline sm" onclick="saveSlots()">💾 保存</button></div>
     <button class="btn outline-blue sm" onclick="showRemind()">📨 诊前提醒(明日)</button>
     <button class="btn primary sm" onclick="openAdminBook()">＋ 代录预约</button>
     <button class="btn outline sm" style="border-color:#1565c0;color:#1565c0" onclick="openImport()">📥 导入预约(拍照识别)</button>
@@ -99,14 +98,14 @@ async function _initDoctors() {
 _initDoctors();
 async function loadSlots() {
   const r = await fetch(A + 'appt_slots_get'); const j = await r.json();
-  if (j.ok) { $('am').value = j.am_slots; $('pm').value = j.pm_slots; $('rv').value = j.reserve || 0; }
+  if (j.ok) { $('rv').value = j.reserve || 0; }
 }
 async function saveSlots() {
   const fd = new FormData();
-  fd.append('am_slots', $('am').value); fd.append('pm_slots', $('pm').value);
+  fd.append('am_slots', 10); fd.append('pm_slots', 10);
   fd.append('reserve_slots', $('rv').value || 0);
   const r = await fetch(A + 'appt_slots_set', { method: 'POST', body: fd }); const j = await r.json();
-  if (j.ok) alert('号源已保存：上午 ' + j.am_slots + ' / 下午 ' + j.pm_slots);
+  if (j.ok) alert('预留号已保存：每时段末尾 ' + j.reserve + ' 格');
   load();
 }
 async function load() {
@@ -164,9 +163,9 @@ function _loadAbSlots() {
   fetch(A + 'appt_slots_view', { method: 'POST', body: fd }).then(r => r.json()).then(j => {
     if (!j.ok) { $('abSlotGrid').innerHTML = '<span style="font-size:12px;color:#c62828">' + esc(j.error || '加载失败') + '</span>'; return; }
     $('abSlotGrid').innerHTML = (j.slots || []).map(s => {
-      if (s.taken) return `<button type="button" disabled style="background:#eee;color:#bbb;cursor:not-allowed" class="slotbtn">${s.slot}</button>`;
+      if (s.full) return `<button type="button" disabled style="background:#eee;color:#bbb;cursor:not-allowed" class="slotbtn">${s.slot}<br><small>满</small></button>`;
       const rsv = s.reserved ? 'border-style:dashed;border-color:#ef6c00;color:#ef6c00' : 'border:1.5px solid var(--primary);color:var(--primary)';
-      return `<button type="button" data-slot="${s.slot}" class="slotbtn" style="background:#fff;${rsv}" onclick="_pickAb(this)">${s.slot}${s.reserved ? '<br><small>预留</small>' : ''}</button>`;
+      return `<button type="button" data-slot="${s.slot}" class="slotbtn" style="background:#fff;${rsv}" onclick="_pickAb(this)">${s.slot}${s.reserved ? '<br><small>预留</small>' : (s.capacity > 1 ? '<br><small>余' + (s.capacity - s.taken) + '</small>' : '')}</button>`;
     }).join('');
   });
 }
