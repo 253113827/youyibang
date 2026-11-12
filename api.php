@@ -65,6 +65,12 @@ pre { white-space: pre-wrap; font: inherit; }
 .foot { margin-top: 18px; border-top: 1px solid #999; padding-top: 6px; font-size: 8.5pt; color: #666; }
 .noprint { text-align:center; margin: 10px 0; }
 @media print { .noprint { display: none; } }
+.attach { page-break-before: always; }
+.attitle { font-size: 12pt; font-weight: bold; border-left: 4px solid #111; padding-left: 8px; margin: 0 0 10px; }
+.ph { display: flex; gap: 10px; margin-bottom: 12px; page-break-inside: avoid; }
+.phimg img { width: 62mm; height: 62mm; object-fit: cover; border: 1px solid #999; }
+.phtxt { flex: 1; font-size: 10pt; line-height: 1.6; }
+.phtxt b { display: block; margin-bottom: 3px; }
 </style></head><body>
 <div class="noprint"><button onclick="window.print()">🖨 打印 / 另存为 PDF</button></div>
 <h1>有医帮 · 中医门诊病历</h1>
@@ -458,8 +464,17 @@ case 'patient_self_query': {
             if ($names) $rxs[] = ['type' => $r['type'], 'items' => $names];
         }
         $ins = json_decode((string)($v['inspection'] ?? '[]'), true) ?: [];
+        $ist = $pdo->prepare('SELECT path, type, ai_result FROM visit_images WHERE visit_id=? ORDER BY id');
+        $ist->execute([$v['id']]);
+        $photos = array_map(function ($x) {
+            /* AI 分析精简：只保留前 160 字摘要 */
+            $ai = trim((string)($x['ai_result'] ?? ''));
+            if (mb_strlen($ai) > 160) $ai = mb_substr($ai, 0, 160) . '…';
+            return ['path' => $x['path'], 'type' => $x['type'], 'ai' => $ai];
+        }, $ist->fetchAll());
         $out[] = [
             'visit_id' => (int)$v['id'],
+            'photos' => $photos,
             'date' => substr((string)$v['registered_at'], 0, 16),
             'status' => $v['status'],
             'diagnosis' => strip_ai_note((string)($v['diagnosis'] ?? '')),
@@ -1167,6 +1182,18 @@ case 'print_opd': {
     $trtHtml = '';
     foreach ($trt as $i => $a) { $amt = (float)($a['price'] ?? 0) * (float)($a['times'] ?? 1); $trtSum += $amt;
         $trtHtml .= ($i + 1) . '. ' . $e(($a['name'] ?? '') . ' ×' . ($a['times'] ?? 1) . '  ¥' . number_format($amt, 2)) . '　'; }
+    $pst = $pdo->prepare('SELECT path, type, ai_result FROM visit_images WHERE visit_id=? ORDER BY id');
+    $pst->execute([$vid]);
+    $photosHtml = '';
+    foreach ($pst->fetchAll() as $x) {
+        $ai = trim((string)($x['ai_result'] ?? ''));
+        if ($ai === '') $ai = '（AI 分析结果未生成）';
+        $photosHtml .= '<div class="ph"><div class="phimg"><img src="' . $e($x['path']) . '"></div>'
+            . '<div class="phtxt"><b>' . $e($x['type']) . '</b>' . $e($ai) . '</div></div>';
+    }
+    $attachPage = $photosHtml
+        ? '<div class="attach"><div class="attitle">附件：检查照片及 AI 分析</div>' . $photosHtml . '</div>'
+        : '';
     $grand += $auxSum + $trtSum;
     $insArr = json_decode((string)($rec['inspection'] ?? '[]'), true) ?: [];
     $insLine = trim(implode('，', array_filter([
@@ -1187,6 +1214,12 @@ pre { white-space: pre-wrap; font: inherit; }
 .total { text-align: right; font-weight: bold; }
 .noprint { text-align: center; margin: 10px 0; }
 @media print { .noprint { display: none; } }
+.attach { page-break-before: always; }
+.attitle { font-size: 12pt; font-weight: bold; border-left: 4px solid #111; padding-left: 8px; margin: 0 0 10px; }
+.ph { display: flex; gap: 10px; margin-bottom: 12px; page-break-inside: avoid; }
+.phimg img { width: 62mm; height: 62mm; object-fit: cover; border: 1px solid #999; }
+.phtxt { flex: 1; font-size: 10pt; line-height: 1.6; }
+.phtxt b { display: block; margin-bottom: 3px; }
 </style></head><body>
 <div class="noprint"><button onclick="window.print()">🖨 打印 / 另存为 PDF</button></div>
 <h1>有医帮 · 门诊病历及处方</h1>
@@ -1202,6 +1235,7 @@ pre { white-space: pre-wrap; font: inherit; }
 <p class="total">合计金额：¥' . number_format($grand, 2) . '</p>
 <p style="margin-top:30px">医师签名：____________　　日期：' . $e(date('Y-m-d')) . '</p>
 <div style="border-top:1px solid #999;margin-top:14px;padding-top:6px;font-size:8.5pt;color:#666">免责声明：本单据由有医帮系统辅助生成，仅供参考，不构成诊疗指令。youyibang.com</div>
+' . $attachPage . '
 </body></html>';
     exit;
 }

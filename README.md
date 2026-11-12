@@ -286,3 +286,8 @@
   - 手机自适应：表格变卡片（data-l 标签）
 - API：patient_list（搜索/含删过滤+就诊统计）/ patient_get / patient_admin_save（新增/全字段更新）/ patient_restore
 - 生产 E2E：列表 6 人 ✓、编辑回填+保存 ✓、电话搜索命中 ✓、手机视口卡片排版 ✓
+
+## v2026.11.11-r22 就诊记录/打印页带检查照片+AI 分析
+1. **患者自助查询**（patient_query.php）：每次就诊记录下显示当日拍摄的照片（舌苔/面色/化验单等）缩略图（点击看原图）+ AI 分析精简摘要（160 字内；未生成显示提示）
+2. **打印页第二页附件**：print_opd 末尾新增「附件：检查照片及 AI 分析」区（CSS page-break-before: always 自动另起一页），每张照片 62mm 方图 + 类型 + AI 分析全文，page-break-inside: avoid 防截断；无照片时不出现附件页
+- 生产 E2E：自助查询照片渲染+AI 摘要 ✓；打印附件页分页/缩略图/AI ✓

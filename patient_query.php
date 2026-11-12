@@ -105,6 +105,13 @@ function render(name, visits) {
     for (const rx of (v.prescriptions || [])) {
       html += '<div class="rx"><b>' + esc(rxType(rx.type)) + '</b>：' + esc((rx.items || []).join('、')) + '</div>';
     }
+    for (const ph of (v.photos || [])) {
+      html += '<div class="rx" style="display:flex;gap:10px;align-items:flex-start">'
+        + '<a href="' + esc(ph.path) + '" target="_blank" style="flex:none"><img loading="lazy" src="' + esc(ph.path) + '" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid #eee"></a>'
+        + '<div style="flex:1;min-width:0;font-size:12px;color:#666"><b style="color:#8a6d1a">' + esc(ph.type) + '</b>'
+        + (ph.ai ? '<div style="margin-top:2px;white-space:pre-wrap">' + esc(ph.ai) + '</div>' : '<div style="margin-top:2px;color:#bbb">AI 分析未生成</div>')
+        + '</div></div>';
+    }
     html += '</dl></div>';
   }
   html += '<div class="card" style="text-align:center;font-size:11px;color:#99a1ad">免责声明：本内容由有医帮AI系统辅助生成，仅供参考，不构成诊疗指令，请以医生签字确认为准。</div>';
