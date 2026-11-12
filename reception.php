@@ -15,7 +15,7 @@ $uid = (int)($_SESSION['uid'] ?? 1);
 <link rel="stylesheet" href="assets/style.css?v=2">
 <script src="assets/speech.js?v=3"></script>
 <script>var YYB_ASR = <?= empty($ASR_ENDPOINTS) ? 'false' : 'true' ?>;</script>
-<script src="assets/recorder.js?v=12"></script>
+<script src="assets/recorder.js?v=13"></script>
 <style>
 :root {
   --nav-blue: #33538f; --primary: #2b7de1; --green: #00b578; --warn: #d48806;
@@ -1072,51 +1072,69 @@ async function uploadRecording(blob, fullText) {
   } catch (e) {}
   return null;
 }
-/* 完成提醒：蜂鸣三声 + 页面标题闪烁（精转/归档完成时唤起医生注意） */
-let _titleTimer = null;
+/* 完成提醒：铃声 + 振动 + 标题闪烁（手机后台/锁屏也能感知） */
+let _titleTimer = null, _ringAudio = null;
+/* 录音开始时调用：解锁铃声（手机浏览器要求用户手势内初始化音频） */
+function unlockRing() {
+  try {
+    if (!_ringAudio) {
+      _ringAudio = new Audio();
+      _ringAudio.src = 'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+    }
+    _ringAudio.muted = true; _ringAudio.play().then(() => { _ringAudio.muted = false; _ringAudio.pause(); _ringAudio.currentTime = 0; }).catch(() => {});
+  } catch (e) {}
+  /* 同步解锁 AudioContext（iOS 需在手势内 resume） */
+  try {
+    if (!window._acUnlock) window._acUnlock = new (window.AudioContext || window.webkitAudioContext)();
+    if (window._acUnlock.state === 'suspended') window._acUnlock.resume();
+  } catch (e) {}
+}
 function notifyAttention(msg) {
   $('orgNote').textContent = msg;
-  try { /* 蜂鸣：三短音 */
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    if (ac.state === 'suspended') ac.resume();
+  /* 手机振动（连续三短） */
+  try { navigator.vibrate && navigator.vibrate([120, 80, 120, 80, 120]); } catch (e) {}
+  /* 铃声：优先预解锁的 AudioContext 蜂鸣，失败则用 ringAudio */
+  try {
+    const ac = window._acUnlock || new (window.AudioContext || window.webkitAudioContext)();
+    if (ac.state === 'suspended' && ac.resume) ac.resume();
     [0, 0.25, 0.5].forEach(t => {
       const o = ac.createOscillator(), g = ac.createGain();
-      o.frequency.value = 880; g.gain.value = 0.15;
+      o.frequency.value = 880; g.gain.value = 0.2;
       o.connect(g); g.connect(ac.destination);
       o.start(ac.currentTime + t); o.stop(ac.currentTime + t + 0.12);
-      g.gain.setValueAtTime(0.15, ac.currentTime + t);
+      g.gain.setValueAtTime(0.2, ac.currentTime + t);
       g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + t + 0.12);
     });
-    setTimeout(() => ac.close(), 1200);
   } catch (e) {}
   if (_titleTimer) clearInterval(_titleTimer);
   let on = false;
   _titleTimer = setInterval(() => {
-    document.title = (on = !on) ? '🔔 ' + msg : '有医帮 - 接诊工作台';
+    document.title = (on = !on) ? '🔔 ' + msg : '福俭堂国医馆 - 接诊工作台';
   }, 900);
-  /* 15 秒后停止闪烁 */
-  setTimeout(() => { clearInterval(_titleTimer); document.title = '有医帮 - 接诊工作台'; }, 15000);
+  setTimeout(() => { clearInterval(_titleTimer); document.title = '福俭堂国医馆 - 接诊工作台'; }, 20000);
 }
-/* 整段精听校对：录音结束后自动用整段音频重新识别（精度高于 2s 分片），弹窗对照修正后采用 */
-async function refineFullRecording(recId, realtimeText) {
+/* 整段精听校对：录音结束后自动用整段音频重新识别（精度高于 2s 分片），弹窗对照修正后采用
+ * 优化：直接用服务器已归档的录音文件（rec_id）精转，省一次手机上传大文件；弹窗立即出现 */
+async function refineFullRecording(recId, realtimeText, opts) {
+  opts = opts || {};
   const dur = Math.round(window._recDuration || 0);
   $('rf_realtime').value = realtimeText || '（无实时转写）';
   $('rf_refined').value = '';
   $('mRefine').classList.add('show');
   $('rfRetry').style.display = 'none';
   window.__lastRecId = recId || window.__lastRecId || 0;
-  if (!window._lastRecBlob || window._lastRecBlob.size < 2000) {
-    $('rfNote').textContent = '缺少有效录音数据（可能浏览器未授权麦克风或录音过短），无法精转。实时转写仍可用。';
+  if (!recId) {
+    $('rfNote').textContent = '录音尚未归档完成，无法精转。实时转写仍可用。';
     return;
   }
-  $('rfNote').textContent = 'AI 正在重新精听整段录音' + (dur ? '（' + fmtSec(dur) + '，约需 ' + Math.max(3, Math.round(dur / 12)) + ' 秒）' : '') + '，请稍候…';
-  $('orgNote').textContent = '精听校对弹窗已打开，请确认转写内容';
+  $('rfNote').textContent = 'AI 正在精听整段录音' + (dur ? '（' + fmtSec(dur) + '，约需 ' + Math.max(3, Math.round(dur / 12)) + ' 秒）' : '') + '，请稍候…（弹窗出现即为开始，完成后会有🔔提醒）';
+  if (opts.silent !== true) $('orgNote').textContent = '精听校对进行中，完成后会有🔔提醒';
   try {
     const fd = new FormData();
     fd.append('visit_id', CUR.visit);
-    fd.append('audio', window._lastRecBlob, 'full.webm');
+    fd.append('rec_id', recId); /* 服务器直接读已归档文件，手机免二次上传 */
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 180000); /* 前端 3 分钟超时，避免无限等待 */
+    const timer = setTimeout(() => ctrl.abort(), 300000); /* 5 分钟超时 */
     const r = await fetch(A + 'asr_full', { method: 'POST', body: fd, signal: ctrl.signal });
     clearTimeout(timer);
     const j = await r.json();
@@ -1230,18 +1248,30 @@ function recorderInit() {
       el.value = (el.value ? el.value.replace(/\s*$/, '') + '\n' : '') + fin;
     },
     onStop: function (fullText, blob) {
-      /* 录音归档：整段音频上传 + 转写随存（可回放/修正）；随后自动整段精转弹窗校对 */
+      /* 立即弹出精听校对弹窗（不等归档），归档完成后用服务器文件精转（手机免二次上传） */
+      $('mRefine').classList.add('show');
+      $('rf_realtime').value = fullText || '（无实时转写）';
+      $('rf_refined').value = '';
+      $('rfNote').textContent = '正在归档录音（上传到服务器，约需几秒到几十秒）…';
+      $('rfRetry').style.display = 'none';
       if (blob && blob.size > 2000) {
         $('orgNote').textContent = '录音结束，正在归档并精听校对…（完成后会有🔔提醒）';
         window._recDuration = (window.REC && REC.durationSec) ? REC.durationSec() : 0;
         window._lastRecBlob = blob;
         uploadRecording(blob, fullText).then(recId => {
-          if (recId && window.YYB_ASR === true) refineFullRecording(recId, fullText);
-          else if (recId) { $('orgNote').textContent = '录音已归档，可编辑转写后点击「整理成病历」'; notifyAttention('录音已归档'); }
-          else { $('orgNote').textContent = '归档上传失败（网络原因），转写内容仍可用；可稍后重试'; notifyAttention('录音归档失败'); }
+          if (recId && window.YYB_ASR === true) {
+            refineFullRecording(recId, fullText, { silent: true });
+          } else if (recId) {
+            $('rfNote').textContent = '录音已归档。精转未启用，可编辑转写后点「整理成病历」';
+            notifyAttention('录音已归档');
+          } else {
+            $('rfNote').textContent = '归档上传失败（网络原因），转写内容仍可用；可点「重新精转」重试';
+            $('rfRetry').style.display = 'inline-block';
+            notifyAttention('录音归档失败');
+          }
         });
       } else {
-        $('orgNote').textContent = '⚠️ 本次录音数据无效（时长过短或麦克风被占用），未归档；实时转写内容仍可用';
+        $('rfNote').textContent = '⚠️ 本次录音数据无效（时长过短或麦克风被占用），未归档；实时转写内容仍可用';
       }
     }
   });

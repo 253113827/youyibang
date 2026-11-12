@@ -398,6 +398,7 @@
           return;
         }
         live = true; fullText = ''; srHadText = false; srFatal = false; asrBusy = false;
+        if (window.unlockRing) { try { window.unlockRing(); } catch (e) {} } /* 手机：手势内解锁铃声/振动 */
         window._recStartAt = Date.now();
         window._recSegments = []; asrSentSec = 0; asrRetryQ = [];
         count(); setState('rec');

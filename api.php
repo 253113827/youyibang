@@ -747,11 +747,22 @@ case 'save_recording_transcript': {
 case 'asr_full': {
     $vid = (int)($_POST['visit_id'] ?? 0);
     check_visit($vid);
-    if (empty($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) fail('缺少音频');
     $ASR_FULL_ENDPOINTS = [
         ['base' => 'http://127.0.0.1:18792/v1', 'key' => 'local', 'model' => 'r2t2'],      // M5 MAX R2T2（隧道）
         ['base' => 'http://127.0.0.1:18765/v1', 'key' => 'local', 'model' => 'whisper-1'], // 服务器本机 whisper 兜底
     ];
+    /* 优先用已归档的录音文件（rec_id）：服务器本地读取，免手机二次上传大文件 */
+    $rid = (int)($_POST['rec_id'] ?? 0);
+    if ($rid > 0) {
+        $st = $pdo->prepare('SELECT file_path FROM visit_recordings WHERE id = ?');
+        $st->execute([$rid]);
+        $fp = $st->fetch()['file_path'] ?? '';
+        $abs = realpath(__DIR__ . '/' . ltrim($fp, '/'));
+        if ($abs && str_starts_with($abs, __DIR__ . '/uploads/') && is_file($abs)) {
+            $_FILES['audio'] = ['tmp_name' => $abs, 'error' => UPLOAD_ERR_OK];
+        }
+    }
+    if (empty($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) fail('缺少音频');
     $tmp = $_FILES['audio']['tmp_name'];
     $err = '';
     foreach ($ASR_FULL_ENDPOINTS as $ep) {
