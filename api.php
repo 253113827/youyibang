@@ -483,6 +483,60 @@ case 'del_patient': {
     ok(['deleted' => $pid]);
 }
 
+/* ===== 医生后台患者管理：列表/详情/全字段保存/恢复 ===== */
+case 'patient_list': {
+    $q = trim($_GET['q'] ?? $_POST['q'] ?? '');
+    $showDel = ($_GET['show_deleted'] ?? $_POST['show_deleted'] ?? '') === '1';
+    $sql = "SELECT p.*, (SELECT COUNT(*) FROM visits v WHERE v.patient_id = p.id) AS visit_cnt,
+            (SELECT MAX(v.registered_at) FROM visits v WHERE v.patient_id = p.id) AS last_visit
+            FROM patients p WHERE 1";
+    $params = [];
+    if (!$showDel) { $sql .= ' AND p.is_deleted = 0'; }
+    if ($q !== '') {
+        $sql .= ' AND (p.name LIKE ? OR p.phone LIKE ? OR p.id_card LIKE ? OR p.archive_no LIKE ?)';
+        $like = '%' . $q . '%';
+        array_push($params, $like, $like, $like, $like);
+    }
+    $sql .= ' ORDER BY p.id DESC LIMIT 300';
+    $st = $pdo->prepare($sql); $st->execute($params);
+    ok(['patients' => $st->fetchAll()]);
+}
+case 'patient_get': {
+    $pid = (int)($_GET['patient_id'] ?? $_POST['patient_id'] ?? 0);
+    if ($pid <= 0) fail('缺少患者 ID');
+    $st = $pdo->prepare('SELECT * FROM patients WHERE id=?'); $st->execute([$pid]);
+    $p = $st->fetch(); if (!$p) fail('患者不存在', 404);
+    ok(['patient' => $p]);
+}
+case 'patient_admin_save': {
+    $pid = (int)($_POST['patient_id'] ?? 0);
+    $name = trim($_POST['name'] ?? '');
+    if ($name === '') fail('姓名必填');
+    $gender = in_array($_POST['gender'] ?? '', ['男', '女', '未知']) ? $_POST['gender'] : '未知';
+    $fields = [$name, $gender, trim($_POST['age'] ?? ''), ($_POST['birthdate'] ?? '') ?: null,
+               trim($_POST['phone'] ?? ''), trim($_POST['id_card'] ?? ''), trim($_POST['address'] ?? ''),
+               trim($_POST['allergy'] ?? ''), trim($_POST['note'] ?? '')];
+    if ($pid > 0) {
+        $st = $pdo->prepare('SELECT id FROM patients WHERE id=?'); $st->execute([$pid]);
+        if (!$st->fetch()) fail('患者不存在', 404);
+        $st = $pdo->prepare('UPDATE patients SET name=?, gender=?, age=?, birthdate=?, phone=?, id_card=?, address=?, allergy=?, note=? WHERE id=?');
+        $fields[] = $pid;
+        $st->execute($fields);
+        ok(['patient_id' => $pid]);
+    }
+    $st = $pdo->prepare('INSERT INTO patients (name, gender, age, birthdate, phone, id_card, address, allergy, note) VALUES (?,?,?,?,?,?,?,?,?)');
+    $st->execute($fields);
+    $newId = (int)$pdo->lastInsertId();
+    $pdo->prepare('UPDATE patients SET archive_no=? WHERE id=?')->execute(['OPD' . str_pad((string)$newId, 6, '0', STR_PAD_LEFT), $newId]);
+    ok(['patient_id' => $newId]);
+}
+case 'patient_restore': {
+    $pid = (int)($_POST['patient_id'] ?? 0);
+    if ($pid <= 0) fail('缺少患者 ID');
+    $pdo->prepare('UPDATE patients SET is_deleted = 0 WHERE id = ?')->execute([$pid]);
+    ok(['restored' => $pid]);
+}
+
 /* 医案更新（index.php 编辑） */
 case 'case_update': {
     $cid = (int)($_POST['case_id'] ?? 0);
