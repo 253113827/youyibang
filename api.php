@@ -7,7 +7,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 $act = $_GET['act'] ?? $_POST['act'] ?? '';
 /* 患者自助查询为公开接口（三要素验证），其余一律要求登录 */
-if (!in_array($act, ['patient_self_query', 'appt_book', 'appt_mine', 'appt_now'], true)) need_login();
+if (!in_array($act, ['patient_self_query', 'appt_book', 'appt_mine', 'appt_now', 'appt_doctors', 'appt_slots_view'], true)) need_login();
 $pdo = db();
 
 /* 去除历史数据中混入正文的 AI 标注行（免责声明统一在单据底部） */
@@ -525,37 +525,86 @@ case 'herb_price_batch': {
 }
 
 /* ===== 预约挂号（复刻 ABC：就诊前/中/后，患者端公开 + 医生端叫号） ===== */
+case 'appt_doctors': {
+    $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
+    ok(['doctors' => $cfg]);
+}
+case 'appt_slots_view': {
+    /* 返回某医生某日某时段的 30 分钟格子及占用情况 */
+    $doctor = trim($_POST['doctor'] ?? $_GET['doctor'] ?? '');
+    $date = trim($_POST['date'] ?? $_GET['date'] ?? '');
+    $period = ($_POST['period'] ?? $_GET['period'] ?? '上午') === '下午' ? '下午' : '上午';
+    $phone = trim($_POST['phone'] ?? '');
+    if (!$doctor || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('参数错误');
+    $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
+    $doc = null;
+    foreach ($cfg as $d0) if (($d0['name'] ?? '') === $doctor) { $doc = $d0; break; }
+    if (!$doc) fail('医生不存在');
+    $range = $doc[$period === '上午' ? 'am' : 'pm'] ?? '';
+    if (!preg_match("/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/", $range, $m)) fail('该医生未配置' . $period . '门诊');
+    $start = ((int)$m[1]) * 60 + (int)$m[2];
+    $end = ((int)$m[3]) * 60 + (int)$m[4];
+    $slots = [];
+    for ($t = $start; $t < $end; $t += 30) {
+        $slots[] = sprintf('%02d:%02d', intdiv($t, 60), $t % 60);
+    }
+    $st = $pdo->prepare("SELECT time_slot, name, phone FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period]);
+    $taken = [];
+    foreach ($st->fetchAll() as $r) {
+        if (!$r['time_slot']) continue;
+        $taken[$r['time_slot']] = ($phone !== '' && $r['phone'] === $phone);
+    }
+    ok(['slots' => array_map(fn($s) => ['slot' => $s, 'taken' => (bool)($taken[$s] ?? false)], $slots),
+        'past' => ($date === date('Y-m-d') && (($period === '上午' && date('H') >= 11) || ($period === '下午' && date('H') >= 17)))]);
+}
 case 'appt_book': {
     $name = trim($_POST['name'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
+    $idc = preg_replace('/\s+/', '', trim($_POST['id_card'] ?? ''));
+    $doctor = trim($_POST['doctor'] ?? '');
     $date = trim($_POST['date'] ?? '');
     $period = ($_POST['period'] ?? '上午') === '下午' ? '下午' : '上午';
+    $slot = trim($_POST['time_slot'] ?? '');
     if ($name === '' || $phone === '') fail('请填写姓名和电话');
+    if (strlen($idc) < 15) fail('请填写正确的身份证号');
+    if (!$doctor || $slot === '') fail('请选择医生和时间段');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('日期格式错误');
     if ($date < date('Y-m-d') || $date > date('Y-m-d', strtotime('+14 days'))) fail('仅可预约今明起 14 天内');
-    if ($date === date('Y-m-d') && $period === '上午' && date('H') >= 11) fail('今日上午号已过，请预约下午或其他日期');
-    /* 号源校验 + 排号 */
-    $max = appt_slots($period);
-    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
-    $st->execute([$date, $period]);
-    $booked = (int)$st->fetchColumn();
-    if ($booked >= $max) fail($period . '号已约满（共 ' . $max . ' 个），请选其他时段');
+    if ($date === date('Y-m-d') && $slot <= date('H:i')) fail('该时间段已过，请选择更晚的时间');
+    /* 格子合法性：slot 必须在该医生该时段内 */
+    $cfg = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
+    $doc = null;
+    foreach ($cfg as $d0) if (($d0['name'] ?? '') === $doctor) { $doc = $d0; break; }
+    if (!$doc) fail('医生不存在');
+    $range = $doc[$period === '上午' ? 'am' : 'pm'] ?? '';
+    if (!preg_match("/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/", $range, $m) || $slot < sprintf('%02d:%02d', $m[1], $m[2]) || $slot > sprintf('%02d:%02d', $m[3], $m[4]) || $slot === sprintf('%02d:%02d', $m[3], $m[4])) fail('所选时间不在该医生门诊时段内');
+    /* 格子未被占 */
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period, $slot]);
+    if ((int)$st->fetchColumn()) fail('该时间段刚被约满，请刷新后选择其他时间');
     /* 同人同日去重 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$name, $phone, $date]);
     if ((int)$st->fetchColumn()) fail('您当天已有预约，请先取消后再改约');
-    $queue = $booked + 1;
-    $st = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, visit_date, time_period, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?)");
-    $st->execute([$name, ($_POST['gender'] ?? '未知') ?: '未知', trim($_POST['age'] ?? ''), $phone, trim($_POST['id_card'] ?? ''), '中医科', $date, $period, $queue, trim($_POST['source'] ?? '网上')]);
-    ok(['id' => (int)$pdo->lastInsertId(), 'queue_no' => $queue, 'date' => $date, 'period' => $period]);
+    /* 排号：同医生同日同时段有效预约数+1 */
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period]);
+    $queue = (int)$st->fetchColumn() + 1;
+    $st = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    $st->execute([$name, ($_POST['gender'] ?? '未知') ?: '未知', trim($_POST['age'] ?? ''), $phone, $idc, ($doc['dept'] ?? '中医科'), $doctor, $date, $period, $slot, $queue, trim($_POST['source'] ?? '网上')]);
+    ok(['id' => (int)$pdo->lastInsertId(), 'queue_no' => $queue, 'date' => $date, 'period' => $period, 'slot' => $slot, 'doctor' => $doctor]);
 }
 case 'appt_mine': {
     $name = trim($_POST['name'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     if ($name === '' || $phone === '') fail('请填写姓名和电话');
-    $st = $pdo->prepare("SELECT id, visit_date, time_period, queue_no, status, dept, called_at, finished_at FROM appointments WHERE name=? AND phone=? AND status != 'cancelled' AND visit_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) ORDER BY visit_date DESC, id DESC LIMIT 20");
+    $st = $pdo->prepare("SELECT id, visit_date, time_period, time_slot, queue_no, status, dept, doctor, called_at, finished_at FROM appointments WHERE name=? AND phone=? AND status != 'cancelled' AND visit_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) ORDER BY visit_date DESC, id DESC LIMIT 20");
     $st->execute([$name, $phone]);
-    ok(['appointments' => $st->fetchAll()]);
+    $rows = $st->fetchAll();
+    foreach ($rows as &$r) $r['name_masked'] = mb_substr($name, 0, 1) . str_repeat('*', max(1, mb_strlen($name) - 1));
+    unset($r);
+    ok(['appointments' => $rows]);
 }
 case 'appt_now': {
     /* 当前叫号大屏：今天最新被叫/就诊中的号 */

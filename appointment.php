@@ -52,6 +52,7 @@ button.go:disabled { opacity:.6; }
 .appt dl { font-size:13px; line-height:1.8; color:#555; }
 .appt .no { font-size:22px; font-weight:800; color:#e53935; }
 .notice { background:#fff8e1; border:1px solid #ffe082; border-radius:10px; padding:10px 14px; font-size:12px; color:#8d6e00; line-height:1.8; margin-bottom:12px; }
+.slotbtn { padding:7px 12px;border-radius:6px;font:inherit;font-size:13px;cursor:pointer; }
 .hint { text-align:center; color:var(--sub); font-size:12px; margin-top:16px; }
 a.home { color:var(--primary); font-size:12px; text-decoration:none; }
 </style>
@@ -87,15 +88,18 @@ a.home { color:var(--primary); font-size:12px; text-decoration:none; }
         <div><label>年龄</label><input id="b_age" inputmode="numeric" placeholder="如 32"></div>
       </div>
       <label>手机号 *（用于查询和叫号提醒）</label><input id="b_phone" inputmode="tel" placeholder="11 位手机号">
-      <label>身份证号（选填，可用于查就诊记录）</label><input id="b_idc" placeholder="选填">
+      <label>身份证号 *（用于建档与查询就诊记录）</label><input id="b_idc" placeholder="18 位身份证号">
       <div class="row2">
-        <div><label>就诊日期</label><select id="b_date"></select></div>
-        <div><label>时段</label><select id="b_period"><option>上午</option><option>下午</option></select></div>
+        <div><label>预约医生 *</label><select id="b_doctor" onchange="loadSlots()"></select></div>
+        <div><label>就诊日期 *</label><select id="b_date" onchange="loadSlots()"></select></div>
       </div>
       <div class="row2">
-        <div><label>就诊科室</label><input value="中医科" disabled style="background:#f7f7f7"></div>
+        <div><label>时段 *</label><select id="b_period" onchange="loadSlots()"><option>上午</option><option>下午</option></select></div>
         <div><label>预约渠道</label><select id="b_src"><option>网上</option><option>电话</option><option>现场</option></select></div>
       </div>
+      <label>选择时间段 *（点击可选的时段；灰色已被约）</label>
+      <div id="slotGrid" style="display:flex;flex-wrap:wrap;gap:6px"><span style="font-size:12px;color:#bbb">请先选择医生和日期</span></div>
+      <input type="hidden" id="b_slot" value="">
       <button class="go" id="bbtn" onclick="book()">提交预约</button>
       <div class="err" id="berr"></div>
       <div class="ok-box" id="bok"></div>
@@ -128,6 +132,39 @@ function switchPane(p) {
   if (p === 'mine') { $('m_name').value = $('b_name').value; $('m_phone').value = $('b_phone').value; }
 }
 /* 日期下拉：今天起 14 天 */
+let _doctors = [];
+async function initDoctors() {
+  try {
+    const r = await fetch(A + 'appt_doctors'); const j = await r.json();
+    if (!j.ok) return;
+    _doctors = j.doctors || [];
+    const sel = $('b_doctor');
+    sel.innerHTML = '';
+    _doctors.forEach(d => { const o = document.createElement('option'); o.value = d.name; o.textContent = d.name + ' · ' + (d.dept || ''); sel.appendChild(o); });
+  } catch (e) {}
+}
+async function loadSlots() {
+  const grid = $('slotGrid'), hid = $('b_slot');
+  hid.value = '';
+  const doctor = $('b_doctor').value, date = $('b_date').value, period = $('b_period').value;
+  if (!doctor || !date) return;
+  grid.innerHTML = '<span style="font-size:12px;color:#bbb">加载中…</span>';
+  try {
+    const fd = new FormData();
+    fd.append('doctor', doctor); fd.append('date', date); fd.append('period', period);
+    fd.append('phone', $('b_phone').value.trim());
+    const r = await fetch(A + 'appt_slots_view', { method: 'POST', body: fd }); const j = await r.json();
+    if (!j.ok) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">' + esc(j.error || '加载失败') + '</span>'; return; }
+    if (j.past) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">该时段已过，请选择其他日期或时段</span>'; return; }
+    grid.innerHTML = (j.slots || []).map(s =>
+      `<button type="button" data-slot="${s.slot}" ${s.taken ? 'disabled style="background:#eee;color:#bbb;cursor:not-allowed"' : 'style="background:#fff;border:1.5px solid var(--primary);color:var(--primary)"'} onclick="pickSlot(this)" onmouseover="this.dataset.h=1" style2="" class="slotbtn" >${s.slot}</button>`).join('');
+  } catch (e) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">网络异常</span>'; }
+}
+function pickSlot(btn) {
+  document.querySelectorAll('#slotGrid .slotbtn').forEach(b => { b.style.background = '#fff'; b.style.color = 'var(--primary)'; b.style.fontWeight = '400'; });
+  btn.style.background = 'var(--primary)'; btn.style.color = '#fff'; btn.style.fontWeight = '600';
+  $('b_slot').value = btn.dataset.slot;
+}
 (function () {
   const sel = $('b_date');
   const wd = ['周日','周一','周二','周三','周四','周五','周六'];
@@ -143,19 +180,24 @@ function switchPane(p) {
 async function book() {
   const err = $('berr'); err.style.display = 'none';
   const name = $('b_name').value.trim(), phone = $('b_phone').value.trim();
+  const idc = $('b_idc').value.trim().replace(/\s+/g, '');
   if (!name || !phone) { err.textContent = '请填写姓名和手机号'; err.style.display = 'block'; return; }
   if (!/^1\d{10}$/.test(phone)) { err.textContent = '手机号格式不正确'; err.style.display = 'block'; return; }
+  if (idc.length < 15) { err.textContent = '请填写正确的身份证号'; err.style.display = 'block'; return; }
+  if (!$('b_slot').value) { err.textContent = '请点击选择一个时间段'; err.style.display = 'block'; return; }
   const btn = $('bbtn'); btn.disabled = true; btn.textContent = '提交中…';
   try {
     const fd = new FormData();
     fd.append('name', name); fd.append('gender', $('b_g').value); fd.append('age', $('b_age').value);
-    fd.append('phone', phone); fd.append('id_card', $('b_idc').value);
+    fd.append('phone', phone); fd.append('id_card', idc);
+    fd.append('doctor', $('b_doctor').value);
     fd.append('date', $('b_date').value); fd.append('period', $('b_period').value);
+    fd.append('time_slot', $('b_slot').value);
     fd.append('source', $('b_src').value);
     const r = await fetch(A + 'appt_book', { method: 'POST', body: fd }); const j = await r.json();
     if (j.ok) {
       $('bok').style.display = 'block';
-      $('bok').innerHTML = '✅ 预约成功！<b>' + esc(j.date) + ' ' + esc(j.period) + ' 第 <b>' + j.queue_no + '</b> 号</b><br><span style="font-size:12px;color:#666">就诊以现场叫号顺序为准，预约时间不等于就诊时间，请提前 15 分钟到店，耐心等待叫号。</span>';
+      $('bok').innerHTML = '✅ 预约成功！<b>' + esc(j.date) + ' ' + esc(j.period) + ' ' + esc(j.slot) + '</b>（' + esc(j.doctor) + '）第 <b>' + j.queue_no + '</b> 号<br><span style="font-size:12px;color:#666">就诊以现场叫号顺序为准，预约时间不等于就诊时间，请提前 15 分钟到店，耐心等待叫号。</span>';
       sessionStorage.setItem('appt_name', name); sessionStorage.setItem('appt_phone', phone);
       setTimeout(() => { switchPane('mine'); loadMine(); }, 2500);
     } else { err.textContent = j.error || '预约失败'; err.style.display = 'block'; }
@@ -182,8 +224,8 @@ function renderMine(list) {
   box.innerHTML = list.map(a => {
     const isToday = a.visit_date === new Date().toISOString().slice(0, 10);
     return `<div class="appt">
-      <div class="t"><b>${esc(a.visit_date)} ${esc(a.time_period)}</b><span class="st ${a.status}">${stCn[a.status] || a.status}</span></div>
-      <dl>${a.status !== 'cancelled' ? `<div>排号：<span class="no">${a.queue_no} 号</span>（${esc(a.dept)}）</div>` : ''}
+      <div class="t"><b>${esc(a.visit_date)} ${esc(a.time_period)} ${esc(a.time_slot || '')}</b><span class="st ${a.status}">${stCn[a.status] || a.status}</span></div>
+      <dl>${a.status !== 'cancelled' ? `<div>预约人：${esc(a.name_masked || '')} · ${esc(a.doctor || a.dept)} · 排号：<span class="no">${a.queue_no} 号</span></div>` : ''}
       ${a.called_at ? `<div>叫号时间：${esc(a.called_at.slice(5, 16))}</div>` : ''}
       ${a.finished_at && a.status === 'done' ? `<div>完成时间：${esc(a.finished_at.slice(5, 16))}</div>` : ''}</dl>
     </div>`;
@@ -252,6 +294,7 @@ if (sessionStorage.getItem('appt_name')) {
   loadMine();
 }
 poll(); setInterval(poll, 20000);
+initDoctors();
 /* 用户任意交互解锁音频（手机要求手势内） */
 document.addEventListener('click', function unlock() {
   try { const ac = window._ac || (window._ac = new (window.AudioContext || window.webkitAudioContext)()); if (ac.state === 'suspended') ac.resume(); } catch (e) {}
