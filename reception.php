@@ -622,10 +622,9 @@ function renderQueue() {
 
 /* ---------- 预约一键接诊 ---------- */
 async function apptWalkin(id) {
-  if (!confirm('为该预约患者建档并开始接诊？')) return;
   const fd = new FormData(); fd.append('id', id);
   const r = await fetch(A + 'appt_walkin', { method: 'POST', body: fd }); const j = await r.json();
-  if (j.ok) { await load(); openVisit(j.visit_id); }
+  if (j.ok) { await loadQueue(); openVisit(j.visit_id); }
   else alert('❌ ' + (j.error || '接诊失败'));
 }
 
@@ -660,7 +659,7 @@ async function openVisit(vid) {
   $('f_dx').value = rec.diagnosis || ''; $('f_notes').value = rec.notes || '';
   window._aux = JSON.parse(rec.auxiliary_exam || '[]'); window._trt = JSON.parse(rec.treatments || '[]');
   tcmRestore(rec.tcm_checklist || null);
-  renderAux(); renderTrt(); renderRx(); renderHist(j.history);
+  renderAux(); renderTrt(); renderRx();
   $('aiResult').innerHTML = '<p class="hint">未运行。点击上方按钮生成鉴别诊断。</p>';
   window._aiData = {}; window._aiHtml = {}; window._aiAdopted = {}; window._aiVisit = null;
   renderQueue();
