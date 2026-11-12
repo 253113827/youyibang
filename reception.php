@@ -293,7 +293,7 @@ table.rx .rowdel:hover { color:var(--danger); }
   <button class="btn green" style="border-radius:4px" onclick="openNewPt()">＋接诊</button>
   <span class="crumb desk-only"><b>门诊</b>　<em>第1次就诊【预约：转诊自康乐诊所】</em></span>
   <div class="rtabs desk-only">
-    <span>💬 会话</span><span>历史 <sup>5</sup></span><span>影像 <sup>3</sup></span><span class="on">AI诊断</span>
+    <span style="cursor:pointer" onclick="openPtChat()">💬 会话</span><span style="cursor:pointer" onclick="openPtVisits()">历史 <sup id="tabHistN">0</sup></span><span style="cursor:pointer" onclick="openPtImages()">影像 <sup id="tabImgN">0</sup></span><span class="on" style="cursor:pointer" onclick="const el=document.getElementById('aiResult'); if(el) el.scrollIntoView({behavior:'smooth'})">AI诊断</span>
   </div>
   <div class="actions">
     <button class="btn outline-blue sm" onclick="saveOpd()">费用预览</button>
@@ -633,6 +633,8 @@ async function openVisit(vid) {
   const r = await fetch(A + 'get_opd&visit_id=' + vid); const j = await r.json();
   if (!j.ok) { alert(j.error || '加载失败'); return; }
   CUR.visit = vid; CUR.patient = j.patient; CUR.record = j.record; CUR.rx = j.prescriptions || {};
+  /* 历史tab计数：该患者历次就诊数 */
+  if (CUR.patient && CUR.patient.id) fetch(A + 'patient_visits&patient_id=' + CUR.patient.id).then(r => r.json()).then(pj => { const t = document.getElementById('tabHistN'); if (t && pj.ok) t.textContent = (pj.visits || []).length; }).catch(() => {});
   window._rxDoses = { chinese: (CUR.rx.chinese && CUR.rx.chinese.doses) || 7 }; /* 中药剂数（整方属性，默认 7 剂） */
   loadHerbSuppliers(); /* 药材价格源下拉 */
   const p = j.patient;
@@ -1191,10 +1193,49 @@ function labInsertCard(x) {
     </div>`;
   document.getElementById('labList').prepend(d);
 }
+/* ===== 顶部 rtabs：会话 / 历史 / 影像 ===== */
+function _ptModal(title, bodyHtml) {
+  let m = document.getElementById('mPtTab');
+  if (!m) {
+    m = document.createElement('div'); m.id = 'mPtTab'; m.className = 'modal'; m.style.zIndex = 60;
+    m.innerHTML = '<div class="mbox"><h3 style="font-size:16px;margin-bottom:10px" id="ptTabTitle"></h3><div id="ptTabBody" style="max-height:60vh;overflow:auto"></div><div style="text-align:right;margin-top:10px"><button class="btn gray sm" onclick="document.getElementById(\'mPtTab\').classList.remove(\'show\')">关闭</button></div></div>';
+    document.body.appendChild(m);
+  }
+  m.onclick = e => { if (e.target === m) m.classList.remove('show'); };
+  document.getElementById('ptTabTitle').textContent = title;
+  document.getElementById('ptTabBody').innerHTML = bodyHtml;
+  m.classList.add('show');
+}
+function openPtChat() {
+  if (!CUR.patient) return alert('请先选择患者');
+  const cid = CUR.patient.case_id;
+  _ptModal('💬 会话 - ' + (CUR.patient.name || ''),
+    cid ? `<p style="font-size:13px;margin-bottom:10px">该患者已有医案，可进入医案问诊继续会话：</p><a class="btn primary sm" href="case.php?id=${cid}">进入医案问诊 →</a>`
+        : `<p style="font-size:13px">该患者暂无医案。可到 <a href="index.php">医案问诊</a> 页发起问诊会话；或在门诊继续本次接诊。</p>`);
+}
+async function openPtVisits() {
+  if (!CUR.patient) return alert('请先选择患者');
+  const r = await fetch(A + 'patient_visits&patient_id=' + CUR.patient.id); const j = await r.json();
+  if (!j.ok) return alert(j.error || '加载失败');
+  const rows = (j.visits || []).map(v => `<div style="padding:8px 0;border-bottom:1px dashed #eee;font-size:13px;cursor:pointer" onclick="document.getElementById('mPtTab').classList.remove('show'); openVisit(${v.id})">
+    <b>${esc(v.registered_at || '')}</b> · <span class="st ${v.status}">${({waiting:'待诊',in_visit:'就诊中',done:'已诊'})[v.status] || v.status}</span><br>
+    <span style="color:#555">${esc(v.diagnosis || v.chief_complaint || '未记录诊断')}</span></div>`).join('');
+  _ptModal('🗂 历史就诊 - ' + (CUR.patient.name || ''), rows || '<p class="hint">该患者暂无就诊记录</p>');
+}
+async function openPtImages() {
+  if (!CUR.visit) return alert('请先选择患者');
+  const r = await fetch(A + 'visit_images&visit_id=' + CUR.visit); const j = await r.json();
+  if (!j.ok) return alert(j.error || '加载失败');
+  const imgs = (j.images || []).map(labCardHtml).join('');
+  _ptModal('🖼 影像资料 - ' + (CUR.patient.name || ''), imgs || '<p class="hint">本次就诊暂无影像；可在左侧「检验报告」区拍照/上传</p>');
+}
+
 async function loadLabImages() {
   if (!CUR.visit) return;
   const r = await fetch(A + 'visit_images&visit_id=' + CUR.visit); const j = await r.json();
   if (!j.ok) return;
+  const n = (j.images || []).length;
+  const tn = document.getElementById('tabImgN'); if (tn) tn.textContent = n;
   $('labList').innerHTML = (j.images || []).map(x => labCardHtml(x)).join('') || '<p class="hint">暂无检验报告图片，点上方「📷 拍照/上传」。</p>';
 }
 function labCardHtml(x) {

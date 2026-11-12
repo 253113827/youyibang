@@ -1367,6 +1367,16 @@ case 'visit_upload': {
     if (!$out) fail('上传失败');
     ok(['images' => $out]);
 }
+/* 患者历次就诊（门诊「历史」tab 弹窗用） */
+case 'patient_visits': {
+    $pid = (int)($_POST['patient_id'] ?? $_GET['patient_id'] ?? 0);
+    if (!$pid) fail('缺少患者 ID');
+    $st = $pdo->prepare("SELECT v.id, v.status, v.registered_at, v.finished_at, r.diagnosis, r.chief_complaint
+        FROM visits v LEFT JOIN opd_records r ON r.visit_id = v.id
+        WHERE v.patient_id = ? ORDER BY v.id DESC LIMIT 30");
+    $st->execute([$pid]);
+    ok(['visits' => $st->fetchAll()]);
+}
 case 'visit_images': {
     $vid = (int)($_GET['visit_id'] ?? $_POST['visit_id'] ?? 0);
     check_visit($vid);
