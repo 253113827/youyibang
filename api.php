@@ -720,26 +720,58 @@ case 'appt_import_commit': {
         foreach (($d0['week'][(string)$wd] ?? []) as $s0) $docSes[$s0['p']] = [$s0['s'], $s0['e']];
         break;
     }
-    $okN = 0; $skip = []; $queues = [];
-    $stChk = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
-    $stMax = $pdo->prepare("SELECT IFNULL(MAX(queue_no),0) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=?");
-    $stIns = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    /* 先收集有效行（按识别时间排序），再依次分配空闲 10 分钟格：导入时间无论什么粒度都自动对齐，顺序不变 */
+    $valid = []; $skip = [];
     foreach ($list as $r) {
         $nm = trim((string)($r['name'] ?? ''));
         $ph = trim((string)($r['phone'] ?? ''));
         $per = (($r['period'] ?? '') === '下午' || ($r['period'] ?? '') === '晚上') ? '下午' : '上午';
         $slot = trim((string)($r['time_slot'] ?? ''));
         if ($nm === '' || $ph === '' || $slot === '') { $skip[] = ($nm ?: '未知名') . '（信息不完整）'; continue; }
-        if (!preg_match('/^\d{2}:\d{2}$/', $slot)) { $skip[] = $nm . '（时间格式无效）'; continue; }
-        if ($docSes && (!isset($docSes[$per]) || $slot < $docSes[$per][0] || $slot >= $docSes[$per][1])) {
-            $skip[] = $nm . '（' . $slot . ' 不在' . $per . '门诊时段' . (isset($docSes[$per]) ? ' ' . $docSes[$per][0] . '-' . $docSes[$per][1] : '') . '内）';
-            continue;
+        if (!preg_match('/^\d{1,2}:\d{2}$/', $slot)) { $skip[] = $nm . '（时间格式无效）'; continue; }
+        $slot = sprintf('%02d:%02d', (int)substr($slot, 0, strpos($slot, ':')), (int)substr($slot, strpos($slot, ':') + 1));
+        $valid[] = ['name' => $nm, 'phone' => $ph, 'period' => $per, 'time' => $slot];
+    }
+    usort($valid, fn($a, $b) => strcmp($a['period'] . $a['time'], $b['period'] . $b['time']));
+    /* 每时段生成 10 分钟格序列，并标记已被占用的时间 */
+    $stChk = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
+    $stMax = $pdo->prepare("SELECT IFNULL(MAX(queue_no),0) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=?");
+    $stIns = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    $slotCache = []; $okN = 0; $queues = [];
+    foreach ($valid as $v) {
+        $per = $v['period']; $dateP = $date . '|' . $per;
+        if (!isset($slotCache[$dateP])) {
+            if (!isset($docSes[$per])) { $slotCache[$dateP] = null; }
+            else {
+                list($ss, $se) = $docSes[$per];
+                $s0m = ((int)substr($ss, 0, 2)) * 60 + (int)substr($ss, 3, 2);
+                $s1m = ((int)substr($se, 0, 2)) * 60 + (int)substr($se, 3, 2);
+                $slots = [];
+                for ($t = $s0m; $t < $s1m && count($slots) < 200; $t += 10) $slots[sprintf('%02d:%02d', intdiv($t, 60), $t % 60)] = false;
+                $stOcc = $pdo->prepare("SELECT time_slot, COUNT(*) c FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow') GROUP BY time_slot");
+                $stOcc->execute([$doctor, $date, $per]);
+                foreach ($stOcc->fetchAll() as $o) if (isset($slots[$o['time_slot']])) $slots[$o['time_slot']] = true;
+                $slotCache[$dateP] = $slots;
+            }
         }
-        $stChk->execute([$nm, $ph, $date]);
-        if ((int)$stChk->fetchColumn()) { $skip[] = $nm . '（当天已存在）'; continue; }
+        $slots = $slotCache[$dateP];
+        if ($slots === null) { $skip[] = $v['name'] . '（' . $per . '无门诊）'; continue; }
+        $stChk->execute([$v['name'], $v['phone'], $date]);
+        if ((int)$stChk->fetchColumn()) { $skip[] = $v['name'] . '（当天已存在）'; continue; }
+        /* 分配下一个空闲格（识别时间越晚越靠后；预留格允许导入占用） */
+        $assigned = null;
+        $startIdx = array_search($v['time'], array_keys($slots));
+        if ($startIdx === false) { /* 识别时间不在格网内（如 12 分钟粒度）：按大小找首个不早于它的格，否则取第一个空格 */
+            foreach ($slots as $s => $used) if (!$used && $s >= $v['time']) { $assigned = $s; break; }
+        }
+        if ($assigned === null) {
+            foreach ($slots as $s => $used) if (!$used) { $assigned = $s; break; }
+        }
+        if ($assigned === null) { $skip[] = $v['name'] . '（' . $per . '号已满）'; continue; }
+        $slots[$assigned] = true; $slotCache[$dateP] = $slots;
         $stMax->execute([$doctor, $date, $per]);
         $q = (int)$stMax->fetchColumn() + 1; $queues[$per] = $q;
-        $stIns->execute([$nm, '未知', '', $ph, '', '中医科', $doctor, $date, $per, $slot, $q, '导入']);
+        $stIns->execute([$v['name'], '未知', '', $v['phone'], '', '中医科', $doctor, $date, $per, $assigned, $q, '导入']);
         $okN++;
     }
     ok(['imported' => $okN, 'skipped' => $skip]);
