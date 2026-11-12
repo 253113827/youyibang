@@ -65,9 +65,11 @@ body { background:#f5f6f7; }
   <div class="atop">
     <h1>📅 预约管理</h1>
     <input type="date" id="d" value="<?= date('Y-m-d') ?>" onchange="load()">
-    <div class="slots">号源：上午 <input id="am" type="number" min="1" max="50"> 下午 <input id="pm" type="number" min="1" max="50">
-      <button class="btn outline sm" onclick="saveSlots()">💾 保存号源</button></div>
-    <a class="btn outline-blue sm" href="appointment.php" target="_blank">患者端预览</a>
+    <div class="slots">号源：上午 <input id="am" type="number" min="1" max="50"> 下午 <input id="pm" type="number" min="1" max="50"> 预留 <input id="rv" type="number" min="0" max="20">
+      <button class="btn outline sm" onclick="saveSlots()">💾 保存</button></div>
+    <button class="btn outline-blue sm" onclick="showRemind()">📨 诊前提醒(明日)</button>
+    <button class="btn primary sm" onclick="openAdminBook()">＋ 代录预约</button>
+    <a class="btn outline sm" href="appointment.php" target="_blank">患者端</a>
   </div>
 
   <div class="nowbanner" id="nowBanner" style="display:none">
@@ -75,7 +77,7 @@ body { background:#f5f6f7; }
   </div>
 
   <table class="atab">
-    <thead><tr><th>排号</th><th>患者</th><th>性别/年龄</th><th>电话</th><th>时段</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
+    <thead><tr><th>排号</th><th>患者</th><th>性别/年龄</th><th>电话</th><th>医生/时段</th><th>科室</th><th>挂号费</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
     <tbody id="tbody"><tr><td colspan="8" style="color:#99a1ad">加载中…</td></tr></tbody>
   </table>
 </div>
@@ -86,13 +88,20 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 const stCn = { pending: '待诊', called: '已叫号', in_visit: '就诊中', done: '已完成', noshow: '过号', cancelled: '已取消' };
 const stCls = { pending: 'pending', called: 'called', in_visit: 'in_visit', done: 'done', noshow: 'noshow', cancelled: 'cancelled' };
+async function _initDoctors() {
+  try { const r = await fetch(A + 'appt_doctors'); const j = await r.json();
+    if (j.ok) $('ab_doctor').innerHTML = (j.doctors || []).map(d => `<option>${esc(d.name)}</option>`).join('');
+  } catch (e) {}
+}
+_initDoctors();
 async function loadSlots() {
   const r = await fetch(A + 'appt_slots_get'); const j = await r.json();
-  if (j.ok) { $('am').value = j.am_slots; $('pm').value = j.pm_slots; }
+  if (j.ok) { $('am').value = j.am_slots; $('pm').value = j.pm_slots; $('rv').value = j.reserve || 0; }
 }
 async function saveSlots() {
   const fd = new FormData();
   fd.append('am_slots', $('am').value); fd.append('pm_slots', $('pm').value);
+  fd.append('reserve_slots', $('rv').value || 0);
   const r = await fetch(A + 'appt_slots_set', { method: 'POST', body: fd }); const j = await r.json();
   if (j.ok) alert('号源已保存：上午 ' + j.am_slots + ' / 下午 ' + j.pm_slots);
   load();
@@ -103,19 +112,22 @@ async function load() {
   const list = j.list || [];
   $('tbody').innerHTML = list.map(a => `<tr>
     <td data-l="排号"><b style="font-size:16px;color:#e53935">${a.queue_no} 号</b></td>
-    <td data-l="患者"><b>${esc(a.name)}</b></td>
+    <td data-l="患者"><b>${esc(a.name)}</b>${a.time_slot ? ' <small style="color:#1565c0">' + esc(a.time_period) + ' ' + esc(a.time_slot) + '</small>' : ' <small style="color:#999">' + esc(a.time_period) + '</small>'}</td>
     <td data-l="性别/年龄">${esc(a.gender)} / ${esc(a.age) || '-'}岁</td>
     <td data-l="电话">${esc(a.phone)}</td>
-    <td data-l="时段">${esc(a.time_period)}</td>
+    <td data-l="医生/时段">${esc(a.doctor || '-')}</td>
+    <td data-l="科室">${esc(a.dept || '中医科')}</td>
+    <td data-l="挂号费">¥10.00</td>
     <td data-l="来源">${esc(a.source)}</td>
     <td data-l="状态"><span class="st ${stCls[a.status]}">${stCn[a.status]}</span></td>
     <td class="ops" data-l="操作">
       ${a.status === 'pending' ? `<button class="b-call" onclick="act('appt_call', ${a.id})">📢 叫号</button>` : ''}
       ${a.status === 'called' ? `<button class="b-vis" onclick="act('appt_set_status&x=1', ${a.id}, 'in_visit')">🩺 开始就诊</button>` : ''}
       ${a.status === 'in_visit' ? `<button class="b-done" onclick="act('appt_set_status&x=1', ${a.id}, 'done')">✅ 完成</button>` : ''}
+      ${['pending', 'called', 'in_visit', 'done'].includes(a.status) ? `<button class="b-ns" style="background:#e3f2fd;color:#1565c0" onclick="openRebook(${a.id}, '${esc(a.name)}', '${esc(a.phone)}', '${esc(a.id_card || '')}')">📅 复诊</button>` : ''}
       ${['pending', 'called'].includes(a.status) ? `<button class="b-ns" onclick="if(confirm('标记为过号？'))act('appt_set_status&x=1', ${a.id}, 'noshow')">过号</button>
       <button class="b-ns" onclick="if(confirm('确定取消该预约？'))act('appt_set_status&x=1', ${a.id}, 'cancelled')">取消</button>` : ''}
-    </td></tr>`).join('') || '<tr><td colspan="8" style="color:#99a1ad">该日期暂无预约</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="10" style="color:#99a1ad">该日期暂无预约</td></tr>';
   /* 当前叫号横幅 */
   const cur = list.filter(a => ['called', 'in_visit'].includes(a.status)).sort((a, b) => (b.called_at || '').localeCompare(a.called_at || ''))[0];
   const nb = $('nowBanner');
@@ -129,8 +141,94 @@ async function act(actName, id, status) {
   const r = await fetch(url, { method: 'POST', body: fd }); const j = await r.json();
   if (j.ok) load(); else alert(j.error || '操作失败');
 }
+/* ===== 代录预约 / 复诊预约 / 诊前提醒 ===== */
+let _abCtx = { date: '', doctor: '', period: '上午' };
+function openAdminBook() { _openAb(''); }
+function openRebook(id, name, phone, idc) { _openAb(JSON.stringify({ name, phone, idc })); }
+function _openAb(pre) {
+  const p = pre ? JSON.parse(pre) : { name: '', phone: '', idc: '' };
+  $('ab_name').value = p.name; $('ab_phone').value = p.phone; $('ab_idc').value = p.idc || '';
+  $('ab_date').value = _abCtx.date = $('d').value;
+  $('ab_slot').value = ''; $('abSlotGrid').innerHTML = '<span style="font-size:12px;color:#bbb">选择时段后显示</span>';
+  $('mAdmin').classList.add('show');
+  setTimeout(() => $('ab_doctor').value = '施宣赫', 0);
+  _loadAbSlots();
+}
+function _loadAbSlots() {
+  _abCtx.doctor = $('ab_doctor').value; _abCtx.period = $('ab_period').value; _abCtx.date = $('ab_date').value;
+  const fd = new FormData();
+  fd.append('doctor', _abCtx.doctor); fd.append('date', _abCtx.date); fd.append('period', _abCtx.period);
+  fetch(A + 'appt_slots_view', { method: 'POST', body: fd }).then(r => r.json()).then(j => {
+    if (!j.ok) { $('abSlotGrid').innerHTML = '<span style="font-size:12px;color:#c62828">' + esc(j.error || '加载失败') + '</span>'; return; }
+    $('abSlotGrid').innerHTML = (j.slots || []).map(s => {
+      if (s.taken) return `<button type="button" disabled style="background:#eee;color:#bbb;cursor:not-allowed" class="slotbtn">${s.slot}</button>`;
+      const rsv = s.reserved ? 'border-style:dashed;border-color:#ef6c00;color:#ef6c00' : 'border:1.5px solid var(--primary);color:var(--primary)';
+      return `<button type="button" data-slot="${s.slot}" class="slotbtn" style="background:#fff;${rsv}" onclick="_pickAb(this)">${s.slot}${s.reserved ? '<br><small>预留</small>' : ''}</button>`;
+    }).join('');
+  });
+}
+function _pickAb(btn) {
+  document.querySelectorAll('#abSlotGrid .slotbtn').forEach(b => { b.style.background = '#fff'; });
+  btn.style.background = 'var(--primary)'; btn.style.color = '#fff';
+  $('ab_slot').value = btn.dataset.slot;
+}
+async function submitAdminBook() {
+  const fd = new FormData();
+  ['name', 'phone', 'id_card', 'doctor', 'date', 'period', 'time_slot'].forEach(k => {
+    const map = { name: 'ab_name', phone: 'ab_phone', id_card: 'ab_idc', doctor: 'ab_doctor', date: 'ab_date', period: 'ab_period', time_slot: 'ab_slot' };
+    fd.append(k, $(map[k]).value);
+  });
+  fd.append('source', $('ab_src').value);
+  const r = await fetch(A + 'appt_admin_book', { method: 'POST', body: fd }); const j = await r.json();
+  if (j.ok) { $('mAdmin').classList.remove('show'); load(); } else alert(j.error || '失败');
+}
+async function showRemind() {
+  const r = await fetch(A + 'appt_remind_list&date=' + $('d').value); const j = await r.json();
+  if (!j.ok) return alert(j.error || '失败');
+  const list = j.list || [];
+  $('remindBody').innerHTML = list.length ? list.map(a =>
+    `<div style="border-bottom:1px dashed #eee;padding:8px 0;font-size:13px">
+      <b>${esc(a.name)}</b> ${esc(a.gender)}/${esc(a.age)}岁 · ${esc(a.phone)}<br>
+      <span style="color:#1565c0">${esc(a.visit_date)} ${esc(a.time_period)} ${esc(a.time_slot || '')} ${esc(a.doctor)} 第${a.queue_no}号</span>
+      <button class="btn outline sm" onclick="copyRemind(this.dataset.t)" data-t="${esc(`【福俭堂国医馆】${a.name}您好，您已预约 ${a.visit_date} ${a.time_period} ${a.time_slot || ''} ${a.doctor}医生门诊（第${a.queue_no}号）。就诊以现场叫号顺序为准，预约时间不等于就诊时间，请提前15分钟到店。地址可导航“福俭堂国医馆”。`)}">📋 复制短信</button>
+    </div>`).join('') : '<p style="color:#99a1ad;font-size:13px">该日期无待提醒预约</p>';
+  $('mRemind').classList.add('show');
+}
+function copyRemind(t) {
+  navigator.clipboard.writeText(t).then(() => alert('已复制，可粘贴到微信/短信发送'));
+}
 loadSlots(); load();
 setInterval(load, 30000);
 </script>
+
+<div class="modal" id="mAdmin">
+  <div class="mbox">
+    <h3 style="font-size:16px;margin-bottom:10px">＋ 代录预约（现场/电话/复诊，可用预留号）</h3>
+    <div class="mgrid">
+      <label>姓名 *<input id="ab_name"></label>
+      <label>电话 *<input id="ab_phone" inputmode="tel"></label>
+      <label class="full">身份证号<input id="ab_idc"></label>
+      <label>医生<select id="ab_doctor" onchange="_loadAbSlots()"></select></label>
+      <label>日期<input id="ab_date" type="date" onchange="_loadAbSlots()"></label>
+      <label>时段<select id="ab_period" onchange="_loadAbSlots()"><option>上午</option><option>下午</option></select></label>
+      <label>来源<select id="ab_src"><option>现场</option><option>电话</option><option>复诊</option></select></label>
+    </div>
+    <label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">选择时间段（虚线橙框=预留号）</label>
+    <div id="abSlotGrid" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+    <input type="hidden" id="ab_slot">
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn gray sm" onclick="document.getElementById('mAdmin').classList.remove('show')">取消</button>
+      <button class="btn primary sm" onclick="submitAdminBook()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="mRemind">
+  <div class="mbox">
+    <h3 style="font-size:16px;margin-bottom:10px">📨 诊前提醒（<span id="remindDate"></span> 预约患者）</h3>
+    <div id="remindBody" style="max-height:60vh;overflow:auto"></div>
+    <div style="text-align:right;margin-top:10px"><button class="btn gray sm" onclick="document.getElementById('mRemind').classList.remove('show')">关闭</button></div>
+  </div>
+</div>
 </body>
 </html>

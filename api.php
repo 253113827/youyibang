@@ -555,7 +555,14 @@ case 'appt_slots_view': {
         if (!$r['time_slot']) continue;
         $taken[$r['time_slot']] = ($phone !== '' && $r['phone'] === $phone);
     }
-    ok(['slots' => array_map(fn($s) => ['slot' => $s, 'taken' => (bool)($taken[$s] ?? false)], $slots),
+    /* 预留号：每时段末尾 reserve_count 个格子仅医生端可分配（现场/电话/复诊录入） */
+    $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
+    $total = count($slots);
+    ok(['slots' => array_map(function ($s, $idx) use ($taken, $total, $reserve) {
+            $isReserved = $reserve > 0 && $idx >= $total - $reserve;
+            return ['slot' => $s, 'taken' => (bool)($taken[$s] ?? false), 'reserved' => $isReserved];
+        }, $slots, array_keys($slots)),
+        'reserve' => $reserve,
         'past' => ($date === date('Y-m-d') && (($period === '上午' && date('H') >= 11) || ($period === '下午' && date('H') >= 17)))]);
 }
 case 'appt_book': {
@@ -583,6 +590,20 @@ case 'appt_book': {
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$doctor, $date, $period, $slot]);
     if ((int)$st->fetchColumn()) fail('该时间段刚被约满，请刷新后选择其他时间');
+    /* 预留号不可由患者自约（仅医生端录入现场/电话/复诊患者使用） */
+    $reserve = (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0);
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period]);
+    $bookedNow = (int)$st->fetchColumn();
+    $cfg2 = json_decode((string)$pdo->query("SELECT v FROM appt_settings WHERE k='doctors'")->fetchColumn() ?: "[]", true) ?: [];
+    foreach ($cfg2 as $d1) if (($d1['name'] ?? '') === $doctor) {
+        $rg = $d1[$period === '上午' ? 'am' : 'pm'] ?? '';
+        if (preg_match("/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/", $rg, $mm)) {
+            $totalSlots = intdiv(((int)$mm[3]) * 60 + (int)$mm[4] - (((int)$mm[1]) * 60 + (int)$mm[2]), 30);
+            if ($reserve > 0 && $bookedNow >= $totalSlots - $reserve) fail('该时段普通号已约满（剩余为预留号），请选其他时段或到店挂号');
+        }
+        break;
+    }
     /* 同人同日去重 */
     $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
     $st->execute([$name, $phone, $date]);
@@ -618,6 +639,33 @@ case 'appt_now': {
         FROM appointments WHERE visit_date=CURDATE()");
     ok(['current' => $cur ?: null, 'stats' => $st2->fetch() ?: []]);
 }
+/* 医生端代录预约（现场挂号/电话/复诊），可占用预留号 */
+case 'appt_admin_book': {
+    $name = trim($_POST['name'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $idc = preg_replace('/\s+/', '', trim($_POST['id_card'] ?? ''));
+    $doctor = trim($_POST['doctor'] ?? '');
+    $date = trim($_POST['date'] ?? '');
+    $period = ($_POST['period'] ?? '上午') === '下午' ? '下午' : '上午';
+    $slot = trim($_POST['time_slot'] ?? '');
+    $source = in_array($_POST['source'] ?? '', ['现场', '电话', '复诊']) ? $_POST['source'] : '现场';
+    if ($name === '' || $phone === '' || !$doctor || $slot === '') fail('缺少必要信息');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('日期格式错误');
+    /* 格子占用校验（同上，但允许占用预留格） */
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND time_slot=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period, $slot]);
+    if ((int)$st->fetchColumn()) fail('该时间段已被占用');
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE name=? AND phone=? AND visit_date=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$name, $phone, $date]);
+    if ((int)$st->fetchColumn()) fail('该患者当天已有预约');
+    $st = $pdo->prepare("SELECT COUNT(*) FROM appointments WHERE doctor=? AND visit_date=? AND time_period=? AND status NOT IN ('cancelled','noshow')");
+    $st->execute([$doctor, $date, $period]);
+    $queue = (int)$st->fetchColumn() + 1;
+    $st = $pdo->prepare("INSERT INTO appointments (name, gender, age, phone, id_card, dept, doctor, visit_date, time_period, time_slot, queue_no, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    $st->execute([$name, ($_POST['gender'] ?? '未知') ?: '未知', trim($_POST['age'] ?? ''), $phone, $idc, '中医科', $doctor, $date, $period, $slot, $queue, $source]);
+    ok(['id' => (int)$pdo->lastInsertId(), 'queue_no' => $queue]);
+}
+
 case 'appt_admin_list': {
     $d = $_GET['date'] ?? date('Y-m-d');
     $st = $pdo->prepare("SELECT * FROM appointments WHERE visit_date=? ORDER BY time_period, queue_no");
@@ -640,16 +688,27 @@ case 'appt_set_status': {
     if (in_array($s, ['done', 'noshow', 'cancelled'])) $pdo->prepare("UPDATE appointments SET finished_at=NOW() WHERE id=?")->execute([$id]);
     ok(['updated' => $id, 'status' => $s]);
 }
+/* 诊前提醒：某日期的预约清单（默认明天），供短信/微信提醒 */
+case 'appt_remind_list': {
+    $d = $_GET['date'] ?? date('Y-m-d', strtotime('+1 day'));
+    $st = $pdo->prepare("SELECT name, gender, age, phone, visit_date, time_period, time_slot, doctor, queue_no FROM appointments WHERE visit_date=? AND status='pending' ORDER BY time_period, time_slot, queue_no");
+    $st->execute([$d]);
+    ok(['date' => $d, 'list' => $st->fetchAll()]);
+}
+
 case 'appt_slots_get': {
     ok(['am_slots' => (int)($pdo->query("SELECT v FROM appt_settings WHERE k='am_slots'")->fetchColumn() ?: 10),
-        'pm_slots' => (int)($pdo->query("SELECT v FROM appt_settings WHERE k='pm_slots'")->fetchColumn() ?: 10)]);
+        'pm_slots' => (int)($pdo->query("SELECT v FROM appt_settings WHERE k='pm_slots'")->fetchColumn() ?: 10),
+        'reserve' => (int)($pdo->query("SELECT v FROM appt_settings WHERE k='reserve_slots'")->fetchColumn() ?: 0)]);
 }
 case 'appt_slots_set': {
     $am = max(1, min(50, (int)($_POST['am_slots'] ?? 10)));
     $pm = max(1, min(50, (int)($_POST['pm_slots'] ?? 10)));
+    $rv = max(0, min(20, (int)($_POST['reserve_slots'] ?? 0)));
     $pdo->prepare("INSERT INTO appt_settings (k, v) VALUES ('am_slots', ?) ON DUPLICATE KEY UPDATE v=VALUES(v)")->execute([$am]);
     $pdo->prepare("INSERT INTO appt_settings (k, v) VALUES ('pm_slots', ?) ON DUPLICATE KEY UPDATE v=VALUES(v)")->execute([$pm]);
-    ok(['am_slots' => $am, 'pm_slots' => $pm]);
+    $pdo->prepare("INSERT INTO appt_settings (k, v) VALUES ('reserve_slots', ?) ON DUPLICATE KEY UPDATE v=VALUES(v)")->execute([$rv]);
+    ok(['am_slots' => $am, 'pm_slots' => $pm, 'reserve' => $rv]);
 }
 
 /* 今日队列 + 患者列表 + 历史就诊 */

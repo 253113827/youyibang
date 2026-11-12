@@ -156,8 +156,11 @@ async function loadSlots() {
     const r = await fetch(A + 'appt_slots_view', { method: 'POST', body: fd }); const j = await r.json();
     if (!j.ok) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">' + esc(j.error || '加载失败') + '</span>'; return; }
     if (j.past) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">该时段已过，请选择其他日期或时段</span>'; return; }
-    grid.innerHTML = (j.slots || []).map(s =>
-      `<button type="button" data-slot="${s.slot}" ${s.taken ? 'disabled style="background:#eee;color:#bbb;cursor:not-allowed"' : 'style="background:#fff;border:1.5px solid var(--primary);color:var(--primary)"'} onclick="pickSlot(this)" onmouseover="this.dataset.h=1" style2="" class="slotbtn" >${s.slot}</button>`).join('');
+    grid.innerHTML = (j.slots || []).map(s => {
+      if (s.taken) return `<button type="button" disabled style="background:#eee;color:#bbb;cursor:not-allowed" class="slotbtn">${s.slot}</button>`;
+      if (s.reserved) return `<button type="button" disabled class="slotbtn" style="background:#fff8e1;border:1.5px dashed #ef6c00;color:#bbb;cursor:not-allowed" title="预留号（到店挂号/电话预约可用）">${s.slot}<br><small>预留</small></button>`;
+      return `<button type="button" data-slot="${s.slot}" class="slotbtn" style="background:#fff;border:1.5px solid var(--primary);color:var(--primary)" onclick="pickSlot(this)">${s.slot}</button>`;
+    }).join('');
   } catch (e) { grid.innerHTML = '<span style="font-size:12px;color:#c62828">网络异常</span>'; }
 }
 function pickSlot(btn) {
@@ -231,6 +234,28 @@ function renderMine(list) {
     </div>`;
   }).join('');
 }
+/* 诊前提醒：明日有预约 → 页面顶部横幅 */
+async function checkTomorrow() {
+  const name = sessionStorage.getItem('appt_name'), phone = sessionStorage.getItem('appt_phone');
+  if (!name || !phone) return;
+  try {
+    const fd = new FormData(); fd.append('name', name); fd.append('phone', phone);
+    const r = await fetch(A + 'appt_mine', { method: 'POST', body: fd }); const j = await r.json();
+    if (!j.ok) return;
+    const tmr = new Date(); tmr.setDate(tmr.getDate() + 1);
+    const ds = tmr.getFullYear() + '-' + String(tmr.getMonth()+1).padStart(2,'0') + '-' + String(tmr.getDate()).padStart(2,'0');
+    const t = (j.appointments || []).find(a => a.visit_date === ds && a.status === 'pending');
+    const nb = document.querySelector('.notice');
+    if (t && nb && !document.getElementById('tmrNotice')) {
+      const d = document.createElement('div');
+      d.id = 'tmrNotice';
+      d.style.cssText = 'background:#e3f2fd;border:1px solid #90caf9;border-radius:10px;padding:10px 14px;font-size:12px;color:#1565c0;line-height:1.8;margin-bottom:12px';
+      d.innerHTML = '📅 <b>诊前提醒：</b>您明天（' + ds + '）' + t.time_period + ' ' + (t.time_slot || '') + ' 有 ' + (t.doctor || '') + ' 医生门诊预约（第 ' + t.queue_no + ' 号），请提前 15 分钟到店。';
+      nb.parentNode.insertBefore(d, nb);
+    }
+  } catch (e) {}
+}
+setTimeout(checkTomorrow, 1500);
 /* 当前叫号横幅 + 被叫号铃声轮询 */
 let _lastCurNo = null, _ringed = {};
 function ring() {
